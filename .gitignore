@@ -1,0 +1,5 @@
+/target
+# Auto generated during build
+/src/midi_consts.rs
+# Graph generated from examples
+graph.html

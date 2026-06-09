@@ -1,0 +1,30 @@
+[package]
+name = "daw"
+version = "0.1.0"
+edition = "2024"
+authors = ["Joseph George Stephen <pronuba66@gmail.com>"]
+description = "Minimal DAW application using dhwani engine"
+license = "MIT OR Apache-2.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.1", features = [] }
+
+[dependencies]
+dhwani = { path = "../core", features = ["controller"] }
+anyhow = "1.0.102"
+cpal = "0.17.3"
+tokio = { version = "1.52.2", features = ["full"] }
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.1", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-process = "2.3.1"
+tauri-plugin-dialog = "2.7.1"
+symphonia = { version = "0.6.0", features = ["wav", "mp3", "mpa"] }
