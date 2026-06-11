@@ -6,19 +6,7 @@ use std::fmt::Debug;
 use crate::{channel::ChannelPositionsMask, node::NodeId};
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
-pub struct PortId(pub(crate) usize);
-
-impl PortId {
-    #[must_use]
-    pub const fn new(id: usize) -> Self {
-        Self(id)
-    }
-
-    #[must_use]
-    pub const fn val(self) -> usize {
-        self.0
-    }
-}
+pub struct PortId(pub usize);
 
 impl From<usize> for PortId {
     fn from(value: usize) -> Self {
@@ -34,18 +22,6 @@ impl Debug for PortId {
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub struct PortProxyId(pub(crate) usize);
-
-impl PortProxyId {
-    #[must_use]
-    pub const fn new(id: usize) -> Self {
-        Self(id)
-    }
-
-    #[must_use]
-    pub const fn val(self) -> usize {
-        self.0
-    }
-}
 
 impl From<usize> for PortProxyId {
     fn from(value: usize) -> Self {
@@ -166,23 +142,28 @@ impl Port {
         }
     }
 
-    pub fn node_id(&self) -> NodeId {
+    #[must_use]
+    pub const fn node_id(&self) -> NodeId {
         self.node_id
     }
 
-    pub fn id(&self) -> PortId {
+    #[must_use]
+    pub const fn id(&self) -> PortId {
         self.id
     }
 
-    pub fn kind(&self) -> PortType {
+    #[must_use]
+    pub const fn kind(&self) -> PortType {
         self.kind
     }
 
-    pub fn auto_connect(&self) -> bool {
+    #[must_use]
+    pub const fn auto_connect(&self) -> bool {
         self.auto_connect
     }
 
-    pub fn name(&self) -> &'static str {
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
         self.name
     }
 }

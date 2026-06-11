@@ -1,6 +1,7 @@
 use dhwani::{
     Processor,
     channel::ChannelPositionsMask,
+    midi_note::MidiNote,
     nodes::{self},
     time::{TimeRange, TimeUnit},
 };
@@ -23,7 +24,12 @@ fn main() -> Result<(), anyhow::Error> {
     let sine_0_node_id = processor
         .add_node(
             track_0_id,
-            &nodes::OscProps::new_sin(CHANNEL_MASK, 220f32, 1f32),
+            &nodes::OscProps::new_sin(
+                CHANNEL_MASK,
+                MidiNote::from_midi_str("C4").unwrap().w(),
+                1f32,
+            )
+            .unwrap(),
         )
         .unwrap();
     // Create track 1
@@ -35,10 +41,15 @@ fn main() -> Result<(), anyhow::Error> {
         let node_id = processor
             .add_node(
                 track_1_id,
-                &nodes::OscProps::new_sin(CHANNEL_MASK, 330f32, 1f32),
+                &nodes::OscProps::new_sin(
+                    CHANNEL_MASK,
+                    MidiNote::from_midi_str("D4").unwrap().w(),
+                    1f32,
+                )
+                .unwrap(),
             )
             .unwrap();
-        // Connect freq to output of sine 0
+        // Connect output of sine 0 to multiplier of sine 1
         processor
             .connect_ports(
                 (sine_0_node_id, nodes::OscProps::PORT_ID_OUTPUT),

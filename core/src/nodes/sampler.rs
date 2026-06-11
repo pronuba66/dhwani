@@ -1,11 +1,10 @@
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use crate::{
     Error,
     channel::{ChannelPosition, ChannelPositionsMask},
     node::{NodeBuilderTrait, NodeCtx, NodeInputs, NodeOutputs, NodeTrait},
     port::{PortId, PortProps, PortType},
-    time::ResolvedTimeRange,
 };
 
 #[derive(Clone)]
@@ -20,7 +19,7 @@ pub struct SampleInfo {
 
 impl SampleInfo {
     #[must_use]
-    pub fn new(
+    pub const fn new(
         id: usize,
         n_channels: u16,
         // sample_rate: SampleRateBaseType,
@@ -36,11 +35,13 @@ impl SampleInfo {
         }
     }
 
-    pub fn id(&self) -> usize {
+    #[must_use]
+    pub const fn id(&self) -> usize {
         self.id
     }
 
-    pub fn n_channels(&self) -> u16 {
+    #[must_use]
+    pub const fn n_channels(&self) -> u16 {
         self.n_channels
     }
 
@@ -48,10 +49,12 @@ impl SampleInfo {
     //     self.sample_rate
     // }
 
-    pub fn n_samples_per_ch(&self) -> usize {
+    #[must_use]
+    pub const fn n_samples_per_ch(&self) -> usize {
         self.n_samples_per_ch
     }
 
+    #[must_use]
     pub fn data(&self) -> Arc<Vec<f32>> {
         self.data.clone()
     }
@@ -67,12 +70,15 @@ impl SamplerProps {
     pub const PORT_ID_MUL_CTRL: PortId = PortId(0);
     pub const PORT_ID_OUTPUT: PortId = PortId(1);
 
-    #[must_use]
+    /// Create new sampler builder props
+    /// # Errors
+    /// Will return if audio is not mono or stereo
     pub fn new(info: SampleInfo) -> Result<Self, Error> {
         if info.n_channels == 0 || info.n_channels > 2 {
-            return Err(Error::msg("Sampler only support mono or stereo".into()));
+            Err(Error::msg("Sampler only support mono or stereo".into()))
+        } else {
+            Ok(Self { mul: 1f32, info })
         }
-        Ok(Self { mul: 1f32, info })
     }
 }
 
@@ -124,7 +130,7 @@ impl Sampler {
 impl NodeTrait for Sampler {
     fn process(
         &mut self,
-        time_range: ResolvedTimeRange,
+        step_range: Range<usize>,
         inputs: &NodeInputs,
         outputs: &mut NodeOutputs,
     ) {
@@ -133,13 +139,9 @@ impl NodeTrait for Sampler {
             .get_signals_mut(SamplerProps::PORT_ID_OUTPUT)
             .unwrap();
         let mul = inputs.get_mono(SamplerProps::PORT_ID_MUL_CTRL);
-        let start = time_range.start() as usize;
-        let end = self
-            .props
-            .info
-            .n_samples_per_ch
-            .min(time_range.end() as usize);
-        let len = if end > start { end - start } else { 0 };
+        let start = step_range.start;
+        let end = self.props.info.n_samples_per_ch.min(step_range.end);
+        let len = end.saturating_sub(start);
         for &ch in &self.chs {
             let j = match ch {
                 ChannelPosition::FrontLeft => 0usize,

@@ -127,7 +127,7 @@ impl Plotter {
                                 TimeUnit::Samples(0),
                                 event::EventData::NoteOn {
                                     note: MidiNote::from_midi_str("C4").unwrap(), // C4
-                                    vel: 0.5f32,
+                                    vel: 1f32,
                                 }
                             ),
                             (0, TimeUnit::Seconds(1f64), event::EventData::NoteOff),
@@ -136,7 +136,7 @@ impl Plotter {
                                 TimeUnit::Seconds(2f64),
                                 event::EventData::NoteOn {
                                     note: MidiNote::from_midi_str("D4").unwrap(), // D4
-                                    vel: 0.5f32,
+                                    vel: 1f32,
                                 }
                             ),
                             (0, TimeUnit::Seconds(4f64), event::EventData::NoteOff),
@@ -145,7 +145,7 @@ impl Plotter {
                                 TimeUnit::Seconds(5f64),
                                 event::EventData::NoteOn {
                                     note: MidiNote::from_midi_str("E4").unwrap(), // E4
-                                    vel: 0.5f32,
+                                    vel: 1f32,
                                 }
                             ),
                             (0, TimeUnit::Seconds(20f64), event::EventData::NoteOff),
@@ -186,7 +186,7 @@ impl Plotter {
                     track_id,
                     Box::new(nodes::SimpleMixerProps::new(
                         CHANNEL_MASK,
-                        vec![0.25f32, 0.5f32],
+                        vec![0.1f32, 0.5f32],
                     )),
                 )
                 .await

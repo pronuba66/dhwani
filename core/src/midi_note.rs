@@ -81,9 +81,10 @@ impl MidiNote {
         MIDI_NOTE_MULS[self.num]
     }
 
+    /// Angular frequency in rad/s
     #[must_use]
-    pub fn freq(&self) -> f32 {
-        440f32 * MIDI_NOTE_MULS[self.num]
+    pub fn w(&self) -> f32 {
+        440f32 * std::f32::consts::TAU * MIDI_NOTE_MULS[self.num]
     }
 
     #[must_use]

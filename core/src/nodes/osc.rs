@@ -1,10 +1,11 @@
+use std::ops::Range;
+
 use crate::{
     Error,
     channel::{ChannelPosition, ChannelPositionsMask},
     event::EventData,
-    node::{NodeBuilderTrait, NodeCtx, NodeInputs, NodeOutputs, NodeTrait},
+    node::{NodeBuilderTrait, NodeCtx, NodeInputs, NodeOutputs, NodeResetCtx, NodeTrait},
     port::{PortId, PortProps, PortType},
-    time::ResolvedTimeRange,
 };
 
 #[derive(Default, Clone)]
@@ -21,7 +22,7 @@ pub struct OscProps {
     mode: OscMode,
     // Duty cycle
     ds: f32,
-    freq: f32,
+    w: f32, // In rad/s
     phase: f32,
     mul: f32,
 }
@@ -29,78 +30,95 @@ pub struct OscProps {
 impl OscProps {
     pub const PORT_ID_IN_EVENTS: PortId = PortId(0);
     pub const PORT_ID_DUTY_CTRL: PortId = PortId(1);
-    pub const PORT_ID_FREQ_CTRL: PortId = PortId(2);
-    pub const PORT_ID_PHASE_CTRL: PortId = PortId(3);
+    pub const PORT_ID_PHASE_CTRL: PortId = PortId(2);
+    pub const PORT_ID_W_CTRL: PortId = PortId(3);
     pub const PORT_ID_MUL_CTRL: PortId = PortId(4);
     pub const PORT_ID_OUTPUT: PortId = PortId(5);
 
+    /// Create new sine oscialltor builder props
+    ///
+    /// # Errors
+    /// Will return error if parameters are invalid
     #[must_use]
-    pub const fn new_sin(channel_mask: ChannelPositionsMask, freq: f32, mul: f32) -> Self {
-        Self {
-            channel_mask,
-            mode: OscMode::Sin,
-            ds: 0.5f32,
-            freq,
-            phase: 0f32,
-            mul,
+    pub fn new_sin(channel_mask: ChannelPositionsMask, w: f32, mul: f32) -> Result<Self, Error> {
+        if w.is_nan() || w.is_infinite() {
+            Err(Error::msg("Angular frequency must be finite".into()))
+        } else {
+            let mul = if mul.is_nan() { 0f32 } else { mul };
+            Ok(Self {
+                channel_mask,
+                mode: OscMode::Sin,
+                ds: 0.5f32,
+                w,
+                phase: 0f32,
+                mul,
+            })
         }
     }
 
+    /// Create new square oscialltor builder props
     ///
     /// # Errors
-    /// Return `Err` if duty cycle `ds` is invalid
-    ///
+    /// Will return error if parameters are invalid
     pub fn new_square(
         channel_mask: ChannelPositionsMask,
         ds: f32,
-        freq: f32,
+        w: f32,
         mul: f32,
     ) -> Result<Self, Error> {
-        if (0f32..=1f32).contains(&ds) {
+        if ds.is_nan() {
+            Err(Error::msg("Duty cycle must be a number".into()))
+        } else if w.is_nan() || w.is_infinite() {
+            Err(Error::msg("Angular frequency must be finite".into()))
+        } else {
+            let ds = ds.clamp(0f32, 1f32);
+            let mul = if mul.is_nan() { 0f32 } else { mul };
             Ok(Self {
                 channel_mask,
                 mode: OscMode::Square,
                 ds,
-                freq,
+                w,
                 phase: 0f32,
                 mul,
             })
-        } else {
-            Err(Error::msg("Duty cycle must be [0, 1]".into()))
         }
     }
 
+    /// Create new saw oscialltor builder props
     ///
     /// # Errors
-    /// Return `Err` if duty cycle `ds` is invalid
-    ///
+    /// Will return error if parameters are invalid
     pub fn new_saw(
         channel_mask: ChannelPositionsMask,
         ds: f32,
-        freq: f32,
+        w: f32,
         mul: f32,
     ) -> Result<Self, Error> {
-        if (0f32..=1f32).contains(&ds) {
+        if ds.is_nan() {
+            Err(Error::msg("Duty cycle must be a number".into()))
+        } else if w.is_nan() || w.is_infinite() {
+            Err(Error::msg("Angular frequency must be finite".into()))
+        } else {
+            let ds = ds.clamp(0f32, 1f32);
+            let mul = if mul.is_nan() { 0f32 } else { mul };
             Ok(Self {
                 channel_mask,
                 mode: OscMode::Saw,
                 ds,
-                freq,
+                w,
                 phase: 0f32,
                 mul,
             })
-        } else {
-            Err(Error::msg("Duty cycle must be [0, 1]".into()))
         }
     }
 }
 
 impl NodeBuilderTrait for OscProps {
-    fn build(&self, _ctx: &mut NodeCtx) -> Box<dyn NodeTrait> {
+    fn build(&self, ctx: &mut NodeCtx) -> Box<dyn NodeTrait> {
         match self.mode {
-            OscMode::Sin => Box::new(OscSin::new(self.clone())),
-            OscMode::Square => Box::new(OscSquare::new(self.clone())),
-            OscMode::Saw => Box::new(OscSaw::new(self.clone())),
+            OscMode::Sin => Box::new(OscSin::new(ctx, self.clone())),
+            OscMode::Square => Box::new(OscSquare::new(ctx, self.clone())),
+            OscMode::Saw => Box::new(OscSaw::new(ctx, self.clone())),
         }
     }
 }
@@ -115,16 +133,16 @@ fn build_port_props(is_sin: bool, channel_mask: ChannelPositionsMask) -> Vec<Por
                 name: "Events",
             },
             PortProps {
-                id: OscProps::PORT_ID_FREQ_CTRL,
-                kind: PortType::SignalIn,
-                auto_connect: false,
-                name: "Frequency",
-            },
-            PortProps {
                 id: OscProps::PORT_ID_PHASE_CTRL,
                 kind: PortType::SignalIn,
                 auto_connect: false,
                 name: "Phase",
+            },
+            PortProps {
+                id: OscProps::PORT_ID_W_CTRL,
+                kind: PortType::SignalIn,
+                auto_connect: false,
+                name: "Angular frequency",
             },
             PortProps {
                 id: OscProps::PORT_ID_MUL_CTRL,
@@ -154,16 +172,16 @@ fn build_port_props(is_sin: bool, channel_mask: ChannelPositionsMask) -> Vec<Por
                 name: "Duty Cycle",
             },
             PortProps {
-                id: OscProps::PORT_ID_FREQ_CTRL,
-                kind: PortType::SignalIn,
-                auto_connect: false,
-                name: "Frequency",
-            },
-            PortProps {
                 id: OscProps::PORT_ID_PHASE_CTRL,
                 kind: PortType::SignalIn,
                 auto_connect: false,
                 name: "Phase",
+            },
+            PortProps {
+                id: OscProps::PORT_ID_W_CTRL,
+                kind: PortType::SignalIn,
+                auto_connect: false,
+                name: "Angular frequency",
             },
             PortProps {
                 id: OscProps::PORT_ID_MUL_CTRL,
@@ -185,63 +203,82 @@ struct OscSin {
     chs: Vec<ChannelPosition>,
     props: OscProps,
     port_props: Vec<PortProps>,
+    sr: f32,
+    phase_delta: f32,
+    phase: f32,
 }
 
 impl OscSin {
     #[must_use]
-    fn new(props: OscProps) -> Self {
+    fn new(ctx: &mut NodeCtx, props: OscProps) -> Self {
         let chs = Vec::<ChannelPosition>::from(props.channel_mask);
         let port_props = build_port_props(true, props.channel_mask);
+        let sr = ctx.sample_rate() as f32;
+        let phase_delta = props.w / sr;
+        let phase = props.phase;
         Self {
             chs,
             props,
             port_props,
+            sr,
+            phase_delta,
+            phase,
         }
     }
 
-    fn val(time: f32, freq: f32, phase: f32, mul: f32) -> f32 {
-        (time * freq).mul_add(std::f32::consts::TAU, phase).sin() * mul
+    fn val_static(&self, phase: f32, mul: f32) -> f32 {
+        (self.props.phase + phase).sin() * self.props.mul * mul
+    }
+
+    fn val(&mut self, phase: f32, w: f32, mul: f32) -> f32 {
+        let val = self.val_static(self.phase + phase, mul);
+        self.phase += self.phase_delta + w;
+        // wrap
+        self.phase = self.phase.rem_euclid(std::f32::consts::TAU);
+        val
     }
 }
 
 impl NodeTrait for OscSin {
     fn process(
         &mut self,
-        time_range: ResolvedTimeRange,
+        step_range: Range<usize>,
         inputs: &NodeInputs,
         outputs: &mut NodeOutputs,
     ) {
-        let sr = time_range.sr();
         let mut output = outputs.get_signals_mut(OscProps::PORT_ID_OUTPUT).unwrap();
         let events = inputs.get_events(OscProps::PORT_ID_IN_EVENTS);
         if let Some(events) = events {
-            events.process(time_range, |i, time, event| {
+            events.process(step_range, |i, delta_step, event| {
                 if let EventData::NoteOn { note, vel } = &event.data {
-                    let val = Self::val(
-                        (time - event.time.to_seconds(sr)) as f32,
-                        self.props.freq * note.mul(),
-                        self.props.phase,
-                        self.props.mul * vel,
-                    );
+                    let time = (delta_step as f64 / f64::from(self.sr)) as f32;
+                    let val = self.val_static(time * self.props.w * note.mul(), *vel);
                     for &ch in &self.chs {
                         output.get_mut(ch).unwrap()[i] += val;
                     }
                 }
             });
         } else {
-            let freq = inputs.get_mono(OscProps::PORT_ID_FREQ_CTRL);
             let phase = inputs.get_mono(OscProps::PORT_ID_PHASE_CTRL);
+            let w = inputs.get_mono(OscProps::PORT_ID_W_CTRL);
             let mul = inputs.get_mono(OscProps::PORT_ID_MUL_CTRL);
-            for (i, time) in time_range.into_iter().enumerate() {
-                let freq = self.props.freq + freq.as_ref().map_or(0f32, |&freq| freq[i]);
-                let phase = self.props.phase + phase.as_ref().map_or(0f32, |&phase| phase[i]);
-                let mul = self.props.mul + mul.as_ref().map_or(0f32, |&mul| mul[i]);
-                let val = Self::val(time as f32, freq, phase, mul);
+            for (i, _) in step_range.enumerate() {
+                let phase = phase.as_ref().map_or(0f32, |&phase| phase[i]);
+                let w = w.as_ref().map_or(0f32, |&w| w[i]);
+                let mul = mul.as_ref().map_or(1f32, |&mul| mul[i]);
+                let val = self.val(phase, w, mul);
                 for &ch in &self.chs {
                     output.get_mut(ch).unwrap()[i] += val;
                 }
             }
         }
+    }
+
+    fn reset(&mut self, ctx: &NodeResetCtx) {
+        self.phase_delta = self.props.w / ctx.sample_rate as f32;
+        // Lets not increment phase from current steps
+        // Else the phase will depend also on the modulation signal
+        self.phase = self.props.phase;
     }
 
     fn port_props(&self) -> &[PortProps] {
@@ -257,49 +294,60 @@ struct OscSquare {
     chs: Vec<ChannelPosition>,
     props: OscProps,
     port_props: Vec<PortProps>,
+    sr: f32,
+    phase_delta: f32,
+    phase: f32,
 }
 
 impl OscSquare {
     #[must_use]
-    fn new(props: OscProps) -> Self {
+    fn new(ctx: &mut NodeCtx, props: OscProps) -> Self {
         let chs = Vec::<ChannelPosition>::from(props.channel_mask);
         let port_props = build_port_props(false, props.channel_mask);
+        let sr = ctx.sample_rate() as f32;
+        let phase_delta = props.w / sr;
+        let phase = props.phase;
         Self {
             chs,
             props,
             port_props,
+            sr,
+            phase_delta,
+            phase,
         }
     }
 
-    fn val(time: f32, ds: f32, freq: f32, phase: f32, mul: f32) -> f32 {
-        let val = (time * freq)
-            .mul_add(std::f32::consts::TAU, phase)
-            .rem_euclid(std::f32::consts::TAU)
-            / std::f32::consts::TAU;
-        if val > ds { 0f32 } else { mul }
+    fn val_static(&self, ds: f32, phase: f32, mul: f32) -> f32 {
+        let ds = ds + self.props.ds;
+        let ds = ds.clamp(0f32, 1f32);
+        let val =
+            (self.props.phase + phase).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
+        if val > ds { 0f32 } else { self.props.mul * mul }
+    }
+
+    fn val(&mut self, ds: f32, phase: f32, w: f32, mul: f32) -> f32 {
+        let val = self.val_static(ds, self.phase + phase, mul);
+        self.phase += self.phase_delta + w;
+        // wrap
+        self.phase = self.phase.rem_euclid(std::f32::consts::TAU);
+        val
     }
 }
 
 impl NodeTrait for OscSquare {
     fn process(
         &mut self,
-        time_range: ResolvedTimeRange,
+        step_range: Range<usize>,
         inputs: &NodeInputs,
         outputs: &mut NodeOutputs,
     ) {
-        let sr = time_range.sr();
         let mut output = outputs.get_signals_mut(OscProps::PORT_ID_OUTPUT).unwrap();
         let events = inputs.get_events(OscProps::PORT_ID_IN_EVENTS);
         if let Some(events) = events {
-            events.process(time_range, |i, time, event| {
+            events.process(step_range, |i, delta_step, event| {
                 if let EventData::NoteOn { note, vel } = &event.data {
-                    let val = Self::val(
-                        (time - event.time.to_seconds(sr)) as f32,
-                        self.props.ds,
-                        self.props.freq * note.mul(),
-                        self.props.phase,
-                        self.props.mul * vel,
-                    );
+                    let time = (delta_step as f64 / f64::from(self.sr)) as f32;
+                    let val = self.val_static(0f32, time * self.props.w * note.mul(), *vel);
                     for &ch in &self.chs {
                         output.get_mut(ch).unwrap()[i] += val;
                     }
@@ -307,20 +355,27 @@ impl NodeTrait for OscSquare {
             });
         } else {
             let ds = inputs.get_mono(OscProps::PORT_ID_DUTY_CTRL);
-            let freq = inputs.get_mono(OscProps::PORT_ID_FREQ_CTRL);
+            let w = inputs.get_mono(OscProps::PORT_ID_W_CTRL);
             let phase = inputs.get_mono(OscProps::PORT_ID_PHASE_CTRL);
             let mul = inputs.get_mono(OscProps::PORT_ID_MUL_CTRL);
-            for (i, time) in time_range.into_iter().enumerate() {
+            for (i, _) in step_range.enumerate() {
                 let ds = self.props.ds + ds.as_ref().map_or(0f32, |ds| ds[i]).clamp(0f32, 1f32);
-                let freq = self.props.freq + freq.as_ref().map_or(0f32, |freq| freq[i]);
                 let phase = self.props.phase + phase.as_ref().map_or(0f32, |phase| phase[i]);
+                let w = self.props.w + w.as_ref().map_or(0f32, |w| w[i]);
                 let mul = self.props.mul + mul.as_ref().map_or(0f32, |mul| mul[i]);
-                let val = Self::val(time as f32, ds, freq, phase, mul);
+                let val = self.val(ds, phase, w, mul);
                 for &ch in &self.chs {
                     output.get_mut(ch).unwrap()[i] += val;
                 }
             }
         }
+    }
+
+    fn reset(&mut self, ctx: &NodeResetCtx) {
+        self.phase_delta = self.props.w / ctx.sample_rate as f32;
+        // Lets not increment phase from current steps
+        // Else the phase will depend also on the modulation signal
+        self.phase = self.props.phase;
     }
 
     fn port_props(&self) -> &[PortProps] {
@@ -336,61 +391,66 @@ struct OscSaw {
     chs: Vec<ChannelPosition>,
     props: OscProps,
     port_props: Vec<PortProps>,
+    sr: f32,
+    phase_delta: f32,
+    phase: f32,
 }
 
 impl OscSaw {
     #[must_use]
-    fn new(props: OscProps) -> Self {
+    fn new(ctx: &mut NodeCtx, props: OscProps) -> Self {
         let chs = Vec::<ChannelPosition>::from(props.channel_mask);
         let port_props = build_port_props(false, props.channel_mask);
+        let sr = ctx.sample_rate() as f32;
+        let phase_delta = props.w / sr;
+        let phase = props.phase;
         Self {
             chs,
             props,
             port_props,
+            sr,
+            phase_delta,
+            phase,
         }
     }
 
-    fn val(time: f32, ds: f32, freq: f32, phase: f32, mul: f32) -> f32 {
-        let mut val = (time * freq)
-            .mul_add(std::f32::consts::TAU, phase)
-            .rem_euclid(std::f32::consts::TAU)
-            / std::f32::consts::TAU;
-        val = if ds <= 0f32 {
-            1f32 - val
-        } else if ds >= 1f32 {
-            val
+    fn val_static(&self, ds: f32, phase: f32, mul: f32) -> f32 {
+        const THRESHOLD: f32 = 1e-6;
+        let ds = ds + self.props.ds;
+        let ds = ds.clamp(THRESHOLD, 1f32 - THRESHOLD);
+        let ramp =
+            (self.props.phase + phase).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
+        let val = if ramp < ds {
+            ramp / ds
         } else {
-            if val < ds {
-                val /= ds;
-            } else {
-                val = 1f32 - ((val - ds) / (1f32 - ds));
-            }
-            val
+            1f32 - ((ramp - ds) / (1f32 - ds))
         };
-        val * mul
+        val * self.props.mul * mul
+    }
+
+    fn val(&mut self, ds: f32, phase: f32, w: f32, mul: f32) -> f32 {
+        let val = self.val_static(ds, self.phase + phase, mul);
+        self.phase += self.phase_delta + w;
+        // wrap
+        self.phase = self.phase.rem_euclid(std::f32::consts::TAU);
+        val
     }
 }
 
 impl NodeTrait for OscSaw {
     fn process(
         &mut self,
-        time_range: ResolvedTimeRange,
+        step_range: Range<usize>,
         inputs: &NodeInputs,
         outputs: &mut NodeOutputs,
     ) {
-        let sr = time_range.sr();
         let mut output = outputs.get_signals_mut(OscProps::PORT_ID_OUTPUT).unwrap();
         let events = inputs.get_events(OscProps::PORT_ID_IN_EVENTS);
         if let Some(events) = events {
-            events.process(time_range, |i, time, event| {
+            events.process(step_range, |i, delta_step, event| {
                 if let EventData::NoteOn { note, vel } = &event.data {
-                    let val = Self::val(
-                        (time - event.time.to_seconds(sr)) as f32,
-                        self.props.ds,
-                        self.props.freq * note.mul(),
-                        self.props.phase,
-                        self.props.mul * vel,
-                    );
+                    let time = (delta_step as f64 / f64::from(self.sr)) as f32;
+                    let val = self.val_static(0f32, time * self.props.w * note.mul(), *vel);
                     for &ch in &self.chs {
                         output.get_mut(ch).unwrap()[i] += val;
                     }
@@ -398,20 +458,27 @@ impl NodeTrait for OscSaw {
             });
         } else {
             let ds = inputs.get_mono(OscProps::PORT_ID_DUTY_CTRL);
-            let freq = inputs.get_mono(OscProps::PORT_ID_FREQ_CTRL);
             let phase = inputs.get_mono(OscProps::PORT_ID_PHASE_CTRL);
+            let w = inputs.get_mono(OscProps::PORT_ID_W_CTRL);
             let mul = inputs.get_mono(OscProps::PORT_ID_MUL_CTRL);
-            for (i, time) in time_range.into_iter().enumerate() {
+            for (i, _) in step_range.enumerate() {
                 let ds = self.props.ds + ds.as_ref().map_or(0f32, |ds| ds[i]);
-                let freq = self.props.freq + freq.as_ref().map_or(0f32, |freq| freq[i]);
                 let phase = self.props.phase + phase.as_ref().map_or(0f32, |phase| phase[i]);
+                let w = self.props.w + w.as_ref().map_or(0f32, |w| w[i]);
                 let mul = self.props.mul + mul.as_ref().map_or(0f32, |mul| mul[i]);
-                let val = Self::val(time as f32, ds, freq, phase, mul);
+                let val = self.val(ds, phase, w, mul);
                 for &ch in &self.chs {
                     output.get_mut(ch).unwrap()[i] += val;
                 }
             }
         }
+    }
+
+    fn reset(&mut self, ctx: &NodeResetCtx) {
+        self.phase_delta = self.props.w / ctx.sample_rate as f32;
+        // Lets not increment phase from current steps
+        // Else the phase will depend also on the modulation signal
+        self.phase = self.props.phase;
     }
 
     fn port_props(&self) -> &[PortProps] {

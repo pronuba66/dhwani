@@ -1,10 +1,11 @@
+use std::ops::Range;
+
 use crate::{
     channel::ChannelPositionsMask,
     event::Event,
     node::{NodeBuilderTrait, NodeCtx, NodeInputs, NodeOutputs, NodeTrait},
     nodes::{self, SimpleMixerProps},
     port::{PortId, PortProps, PortProxy, PortType},
-    time::ResolvedTimeRange,
 };
 
 #[derive(Clone)]
@@ -37,11 +38,12 @@ struct SimplePiano {
 
 impl SimplePiano {
     fn new(ctx: &mut NodeCtx, props: SimplePianoProps) -> Self {
+        // C4 or 440hz is base note with multiplier 1
         const PROPS: [(f32, f32); 4] = [
-            (220f32, 1f32),    // fundamental
-            (440f32, 0.9f32),  // 1st harmonics
-            (660f32, 0.75f32), // 2nd harmonics
-            (880f32, 0.25f32), // 3rd harmonics
+            (440f32 * std::f32::consts::TAU, 1f32),          // fundamental
+            (440f32 * 2f32 * std::f32::consts::TAU, 0.9f32), // 1st harmonics
+            (440f32 * 3f32 * std::f32::consts::TAU, 0.75f32), // 2nd harmonics
+            (440f32 * 4f32 * std::f32::consts::TAU, 0.25f32), // 3rd harmonics
         ];
         let mut port_props = Vec::<PortProps>::with_capacity(1);
         let piano_roll_node_id = ctx
@@ -64,9 +66,9 @@ impl SimplePiano {
             auto_connect: true,
             name: "Output",
         });
-        for (freq, mul) in &PROPS {
+        for (w, mul) in &PROPS {
             let id = ctx
-                .add_node(&nodes::OscProps::new_sin(props.channel_mask, *freq, *mul))
+                .add_node(&nodes::OscProps::new_sin(props.channel_mask, *w, *mul).unwrap())
                 .unwrap();
             let _ = ctx.connect_nodes(piano_roll_node_id, id);
             let _ = ctx.connect_nodes(id, output_node_id);
@@ -78,7 +80,7 @@ impl SimplePiano {
 impl NodeTrait for SimplePiano {
     fn process(
         &mut self,
-        _time_range: ResolvedTimeRange,
+        _step_range: Range<usize>,
         _inputs: &NodeInputs,
         _outputs: &mut NodeOutputs,
     ) {

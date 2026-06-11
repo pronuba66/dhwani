@@ -1,10 +1,12 @@
+use std::ops::Range;
+
 use biquad::{Biquad, Coefficients, DirectForm2Transposed, ToHertz};
 
 use crate::{
+    Error,
     channel::{ChannelPosition, ChannelPositionsMask},
-    node::{NodeBuilderTrait, NodeCtx, NodeInputs, NodeOutputs, NodeTrait},
+    node::{NodeBuilderTrait, NodeCtx, NodeInputs, NodeOutputs, NodeResetCtx, NodeTrait},
     port::{PortId, PortProps, PortType},
-    time::{ResolvedTimeRange, SampleBaseType},
 };
 
 #[derive(Clone, Copy)]
@@ -26,39 +28,71 @@ impl SimpleFilterProps {
     pub const PORT_ID_INPUT: PortId = PortId(0);
     pub const PORT_ID_OUTPUT: PortId = PortId(1);
 
+    /// Create new low pass filter builder props
+    ///
+    /// # Errors
+    /// Will return error if parameters are invalid
     #[must_use]
-    pub const fn new_lpf(channel_mask: ChannelPositionsMask, freq: f32) -> Self {
-        Self {
-            channel_mask,
-            filter_type: SimpleFilterType::LPF,
-            freq,
+    pub fn new_lpf(channel_mask: ChannelPositionsMask, freq: f32) -> Result<Self, Error> {
+        if freq.is_nan() || freq.is_infinite() {
+            Err(Error::msg("Frequency must be finite".into()))
+        } else {
+            Ok(Self {
+                channel_mask,
+                filter_type: SimpleFilterType::LPF,
+                freq,
+            })
         }
     }
 
+    /// Create new high pass filter builder props
+    ///
+    /// # Errors
+    /// Will return error if parameters are invalid
     #[must_use]
-    pub const fn new_hpf(channel_mask: ChannelPositionsMask, freq: f32) -> Self {
-        Self {
-            channel_mask,
-            filter_type: SimpleFilterType::HPF,
-            freq,
+    pub fn new_hpf(channel_mask: ChannelPositionsMask, freq: f32) -> Result<Self, Error> {
+        if freq.is_nan() || freq.is_infinite() {
+            Err(Error::msg("Frequency must be finite".into()))
+        } else {
+            Ok(Self {
+                channel_mask,
+                filter_type: SimpleFilterType::HPF,
+                freq,
+            })
         }
     }
 
+    /// Create new band pass filter builder props
+    ///
+    /// # Errors
+    /// Will return error if parameters are invalid
     #[must_use]
-    pub const fn new_bpf(channel_mask: ChannelPositionsMask, freq: f32) -> Self {
-        Self {
-            channel_mask,
-            filter_type: SimpleFilterType::BPF,
-            freq,
+    pub fn new_bpf(channel_mask: ChannelPositionsMask, freq: f32) -> Result<Self, Error> {
+        if freq.is_nan() || freq.is_infinite() {
+            Err(Error::msg("Frequency must be finite".into()))
+        } else {
+            Ok(Self {
+                channel_mask,
+                filter_type: SimpleFilterType::BPF,
+                freq,
+            })
         }
     }
 
+    /// Create new band stop filter builder props
+    ///
+    /// # Errors
+    /// Will return error if parameters are invalid
     #[must_use]
-    pub const fn new_bsf(channel_mask: ChannelPositionsMask, freq: f32) -> Self {
-        Self {
-            channel_mask,
-            filter_type: SimpleFilterType::BSF,
-            freq,
+    pub fn new_bsf(channel_mask: ChannelPositionsMask, freq: f32) -> Result<Self, Error> {
+        if freq.is_nan() || freq.is_infinite() {
+            Err(Error::msg("Frequency must be finite".into()))
+        } else {
+            Ok(Self {
+                channel_mask,
+                filter_type: SimpleFilterType::BSF,
+                freq,
+            })
         }
     }
 }
@@ -72,7 +106,6 @@ impl NodeBuilderTrait for SimpleFilterProps {
 struct SimpleFilter {
     chs: Vec<ChannelPosition>,
     biquad2: Vec<DirectForm2Transposed<f32>>,
-    last_end_step: SampleBaseType,
     port_props: Vec<PortProps>,
 }
 
@@ -112,7 +145,6 @@ impl SimpleFilter {
         Self {
             chs,
             biquad2,
-            last_end_step: 0,
             port_props,
         }
     }
@@ -121,15 +153,10 @@ impl SimpleFilter {
 impl NodeTrait for SimpleFilter {
     fn process(
         &mut self,
-        time_range: ResolvedTimeRange,
+        step_range: Range<usize>,
         inputs: &NodeInputs,
         outputs: &mut NodeOutputs,
     ) {
-        if time_range.start() != self.last_end_step {
-            for biquad2 in &mut self.biquad2 {
-                biquad2.reset_state();
-            }
-        }
         let mut output = outputs
             .get_signals_mut(SimpleFilterProps::PORT_ID_OUTPUT)
             .unwrap();
@@ -137,13 +164,18 @@ impl NodeTrait for SimpleFilter {
         if let Some(input) = input {
             for (i, &ch) in self.chs.iter().enumerate() {
                 if let Some(signal) = input.get(ch) {
-                    for (j, _) in time_range.into_iter().enumerate() {
+                    for (j, _) in step_range.clone().enumerate() {
                         output.get_mut(ch).unwrap()[j] = self.biquad2[i].run(signal[j]);
                     }
                 }
             }
         }
-        self.last_end_step = time_range.end();
+    }
+
+    fn reset(&mut self, _ctx: &NodeResetCtx) {
+        for biquad2 in &mut self.biquad2 {
+            biquad2.reset_state();
+        }
     }
 
     fn port_props(&self) -> &[PortProps] {

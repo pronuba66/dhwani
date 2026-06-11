@@ -3,19 +3,7 @@ use std::fmt::Debug;
 use crate::time::TimeRange;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct TrackId(pub(crate) usize);
-
-impl TrackId {
-    #[must_use]
-    pub const fn new(id: usize) -> Self {
-        Self(id)
-    }
-
-    #[must_use]
-    pub const fn val(self) -> usize {
-        self.0
-    }
-}
+pub struct TrackId(pub usize);
 
 impl From<usize> for TrackId {
     fn from(value: usize) -> Self {
@@ -36,7 +24,7 @@ impl Debug for Track {
 }
 
 impl Track {
-    pub(crate) fn new(id: TrackId, time_range: TimeRange) -> Self {
+    pub(crate) const fn new(id: TrackId, time_range: TimeRange) -> Self {
         Self { id, time_range }
     }
 
@@ -50,7 +38,7 @@ impl Track {
         self.time_range
     }
 
-    pub fn set_time_range(&mut self, time_range: TimeRange) {
-        self.time_range = time_range
+    pub const fn set_time_range(&mut self, time_range: TimeRange) {
+        self.time_range = time_range;
     }
 }

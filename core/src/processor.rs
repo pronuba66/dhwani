@@ -7,13 +7,13 @@ use crate::{
     Error,
     channel::ChannelPosition,
     connection::Connection,
-    event::Events,
+    event::EventsFrame,
     frame::Frame,
-    node::{Node, NodeBuilderTrait, NodeId, NodeInputs, NodeOutputs},
+    node::{Node, NodeBuilderTrait, NodeId, NodeInputs, NodeOutputs, NodeResetCtx},
     nodes::NodeInfo,
     port::{Port, PortId, PortType},
     signal::SingalsFrame,
-    time::{ResolvedTimeRange, SampleBaseType, SampleRateBaseType, TimeFrom, TimeRange, TimeUnit},
+    time::{SampleBaseType, SampleRateBaseType, TimeFrom, TimeRange, TimeUnit},
     track::{Track, TrackId},
 };
 
@@ -233,7 +233,7 @@ impl Processor {
                 .as_ref()
                 .is_some_and(|output_port| output_port.node_id == root_id)
         {
-            self.output_port = None
+            self.output_port = None;
         }
         let mut stack = Vec::<NodeId>::with_capacity(self.nodes_map.capacity());
         stack.push(root_id);
@@ -259,7 +259,7 @@ impl Processor {
                 PortType::EventsIn | PortType::SignalIn | PortType::Proxy(_) => {}
                 PortType::EventsOut => {
                     // Lets keep minimum of 64 events per frame
-                    let frame = Frame::Events(Events::new(self.min_events_per_frame()));
+                    let frame = Frame::Events(EventsFrame::new(self.min_events_per_frame()));
                     frames.insert(port.id, frame);
                 }
                 PortType::SignalOut(channel_mask) => {
@@ -271,15 +271,10 @@ impl Processor {
         frames
     }
 
-    fn clear_frames(&mut self, id: NodeId) {
+    fn reset_frames(&mut self, id: NodeId) {
         if let Some(frames) = self.frames_maps.get_mut(&id) {
             for frame in frames.values_mut() {
-                match frame {
-                    Frame::Events(events) => {
-                        events.clear();
-                    }
-                    Frame::Signals(frame) => frame.clear(),
-                }
+                frame.reset();
             }
         }
     }
@@ -314,6 +309,7 @@ impl Processor {
     /// Buffer length must be a multiple of `self.n_channels` and must
     /// be <= `self.n_channels` * `self.buffer_size`
     ///
+    #[allow(clippy::too_many_lines)]
     pub fn process(&mut self, buffer: &mut [f32]) -> Result<usize, Error> {
         let n_channels = usize::from(self.n_channels);
         if !buffer.len().is_multiple_of(n_channels) {
@@ -346,7 +342,7 @@ impl Processor {
         let start_sample = self.step;
         let end_sample = start_sample + chunk as SampleBaseType;
         for i in 0..self.nodes.len() {
-            let node_id = *self.nodes.get(i).unwrap();
+            let node_id = self.nodes[i];
             // Temporarly take the item from hashmap
             let mut node = self.nodes_map.remove(&node_id).unwrap();
             // Compute time related
@@ -356,47 +352,69 @@ impl Processor {
                     time_range.start().to_samples(self.sr),
                     time_range
                         .end()
-                        .map(|t| t.to_samples(self.sr))
-                        .unwrap_or_else(|| end_sample),
+                        .map_or_else(|| end_sample, |t| t.to_samples(self.sr)),
                 )
             };
+            // Add duration extension from node
+            let track_end_sample = node.inner.duration_extension().map_or_else(
+                || end_sample, // Keep it at max if None
+                |time| {
+                    // Lets not take negative extension
+                    track_end_sample + time.to_samples(self.sr).max(0)
+                },
+            );
             let new_start_sample = start_sample.max(track_start_sample);
             let new_end_sample = end_sample.min(track_end_sample);
             if new_start_sample >= new_end_sample {
                 // Clear frame if not invalidated.
-                // Lets say a node A is from time [a,b] and  node B is from [c,d]
-                // where [a,b] < [c,d] and A is connected to B. When processing B,
+                // Lets say a node A is from time [a,b) and  node B is from [c,d)
+                // where [a,b) < [c,d) and A is connected to B. When processing B,
                 // B will fetch values from A, but it might be a previous value
                 // So need to clear it
                 if !node.frames_invalidated {
                     node.frames_invalidated = true;
-                    self.clear_frames(node_id);
+                    self.reset_frames(node_id);
                 }
                 // Insert back
                 self.nodes_map.insert(node_id, node);
                 continue;
-            };
-            let node_time_range = ResolvedTimeRange::try_from_time_range(
-                self.sr,
-                TimeRange::new(new_start_sample.into(), Some(new_end_sample.into())),
-            )
-            .unwrap();
+            }
             node.frames_invalidated = false;
-            let range_start = (node_time_range.start() - start_sample) as usize;
-            let range_end = range_start + node_time_range.duraiton();
-            let range = range_start..range_end;
+            let frame_range = {
+                // Frame rang is the range for which the frames are relevant
+                // for the current session of processing
+                debug_assert!(new_start_sample - start_sample >= 0);
+                debug_assert!(new_end_sample - start_sample >= 0);
+                #[allow(clippy::cast_possible_truncation)]
+                #[allow(clippy::cast_sign_loss)]
+                let frame_range_start = (new_start_sample - start_sample) as usize;
+                let frame_range_end = (new_end_sample - start_sample) as usize;
+                frame_range_start..frame_range_end
+            };
             // Temporarly take the item from hashmap
             let mut frames = self.frames_maps.remove(&node_id).unwrap();
             let node_inputs = NodeInputs::new(
-                range.clone(),
+                self.sr,
+                frame_range.clone(),
                 &self.frames_maps,
                 node_id,
                 &self.compiled_connections_map,
             );
-            let mut node_outputs = NodeOutputs::new(range.clone(), &mut frames);
-            node_outputs.clear_buffers();
+            let mut node_outputs = NodeOutputs::new(self.sr, frame_range, &mut frames);
+            node_outputs.clear();
+            let step_range = {
+                // Step range is the range iterator sent to process the nodes,
+                // It will a range with the track start time as base
+                debug_assert!(new_start_sample - track_start_sample >= 0);
+                debug_assert!(new_end_sample - track_start_sample >= 0);
+                #[allow(clippy::cast_possible_truncation)]
+                #[allow(clippy::cast_sign_loss)]
+                let step_range_start = (new_start_sample - track_start_sample) as usize;
+                let step_range_end = (new_end_sample - track_start_sample) as usize;
+                step_range_start..step_range_end
+            };
             node.inner
-                .process(node_time_range, &node_inputs, &mut node_outputs);
+                .process(step_range, &node_inputs, &mut node_outputs);
             // Insert back
             self.frames_maps.insert(node_id, frames);
             // Insert back
@@ -548,8 +566,7 @@ impl Processor {
     /// * `builder` - [`NodeBuilderTrait`] object
     ///
     /// # Errors
-    /// Returns error if track does not exits
-    ///
+    /// Returns error if track_id not found
     pub fn add_node(
         &mut self,
         track_id: TrackId,
@@ -558,15 +575,17 @@ impl Processor {
         self.add_node_with_parent(track_id, None, builder)
     }
 
+    /// # Errors
+    /// Returns error if track_id not found
     pub(crate) fn add_node_with_parent(
         &mut self,
         track_id: TrackId,
         parent_id: Option<NodeId>,
         builder: &dyn NodeBuilderTrait,
     ) -> Result<NodeId, Error> {
-        let id = Node::add(self, track_id, parent_id, builder)?;
+        let id = Node::add(self, track_id, parent_id, builder);
         self.invalidate = true;
-        Ok(id)
+        id
     }
 
     /// Replace node
@@ -623,24 +642,32 @@ impl Processor {
         Ok(())
     }
 
+    /// Remove track
+    ///
+    /// # Errors
+    /// Returns error if track not found
     pub fn remove_track(&mut self, id: TrackId) -> Result<Track, Error> {
         let track = self
             .tracks_map
             .remove(&id)
             .ok_or_else(|| Error::msg("Track not found".into()))?;
-        let mut ids: Vec<NodeId> = self
+        let ids: Vec<NodeId> = self
             .nodes_map
             .iter()
             .filter(|(_, node)| node.track_id() == id)
             .map(|(&id, _)| id)
             .collect();
-        for id in ids.drain(..) {
+        for id in ids {
             self.remove_nodes(id, true);
         }
         self.invalidate = true;
         Ok(track)
     }
 
+    /// Set the track time range
+    ///
+    /// # Errors
+    /// Returns error if track not found
     pub fn set_track_time_range(
         &mut self,
         id: TrackId,
@@ -655,6 +682,10 @@ impl Processor {
         Ok(())
     }
 
+    /// Set the output port
+    ///
+    /// # Errors
+    /// Returns error if node or port not found or node is a child node
     pub fn set_output_port(&mut self, port: Option<(NodeId, PortId)>) -> Result<(), Error> {
         if let Some(port) = port {
             let node = self
@@ -678,7 +709,7 @@ impl Processor {
     }
 
     #[must_use]
-    pub fn get_output_port(&self) -> Option<Port> {
+    pub const fn get_output_port(&self) -> Option<Port> {
         self.output_port
     }
 
@@ -788,6 +819,7 @@ impl Processor {
         self.invalidate = true;
     }
 
+    #[must_use]
     pub fn get_track_count(&self) -> usize {
         self.tracks_map.len()
     }
@@ -798,6 +830,7 @@ impl Processor {
         }
     }
 
+    #[must_use]
     pub fn get_node_count(&self, track_id: TrackId) -> usize {
         self.nodes_map.iter().fold(0usize, |acc, (_, node)| {
             if node.track_id() == track_id && node.parent_id().is_none() {
@@ -839,6 +872,7 @@ impl Processor {
         } else if !enable && !self.is_playing() {
             self.set_playing(false);
         } else {
+            #[allow(clippy::collapsible_else_if)]
             if enable {
                 self.set_playing(true);
                 self.fader = self.fader.fade_in();
@@ -848,10 +882,12 @@ impl Processor {
         }
     }
 
-    pub fn is_fader_done(&self) -> bool {
+    #[must_use]
+    pub const fn is_fader_done(&self) -> bool {
         self.fader.done()
     }
 
+    #[must_use]
     pub fn seek(&mut self, time: TimeFrom) -> f64 {
         let last_step = self.step;
         match time {
@@ -866,9 +902,26 @@ impl Processor {
             }
         }
         if self.step != last_step {
-            let time_unit = TimeUnit::Samples(self.step);
+            let mut ctx = NodeResetCtx {
+                sample_rate: self.sr,
+                step: self.step,
+            };
             for node in self.nodes_map.values_mut() {
-                node.inner.reset(time_unit);
+                ctx.step = self.step
+                    - self
+                        .tracks_map
+                        .get(&node.track_id())
+                        .unwrap()
+                        .time_range()
+                        .start()
+                        .to_samples(self.sr);
+                node.inner.reset(&ctx);
+            }
+            // Clear all frame
+            for frames in self.frames_maps.values_mut() {
+                for frame in frames.values_mut() {
+                    frame.reset();
+                }
             }
         }
         TimeUnit::Samples(self.step).to_seconds(self.sr)
@@ -958,11 +1011,11 @@ impl Processor {
                 state.2 = (p / DISTANCE).round() as usize;
             }
             let graph_node = GraphNode {
-                id: format!("N{}", node.id().val()),
-                name: format!("N{} {}", node.id().val(), node.inner.name()),
+                id: format!("N{}", node.id().0),
+                name: format!("N{} {}", node.id().0, node.inner.name()),
                 x,
                 y,
-                value: node.id().val() as f64,
+                value: node.id().0 as f64,
                 category: 0,
                 symbol_size: NODE_SIZE,
                 label: None,
@@ -970,8 +1023,8 @@ impl Processor {
             nodes.push(graph_node);
             if let Some(parent_node_id) = node.parent_id() {
                 let link = GraphLink {
-                    source: format!("N{}", parent_node_id.val()),
-                    target: format!("N{}", node.id().val()),
+                    source: format!("N{}", parent_node_id.0),
+                    target: format!("N{}", node.id().0),
                     value: None,
                 };
                 links.push(link);
@@ -993,17 +1046,11 @@ impl Processor {
                     _ => "".to_string(),
                 };
                 let graph_node = GraphNode {
-                    id: format!("N{}P{}", node.id().val(), port.id.val()),
-                    name: format!(
-                        "N{}P{} {}{}",
-                        node.id().val(),
-                        port.id.val(),
-                        port.name,
-                        postfix
-                    ),
+                    id: format!("N{}P{}", node.id().0, port.id.0),
+                    name: format!("N{}P{} {}{}", node.id().0, port.id.0, port.name, postfix),
                     x,
                     y,
-                    value: node.id().val() as f64,
+                    value: node.id().0 as f64,
                     category,
                     symbol_size: PORT_SIZE,
                     label: None,
@@ -1011,14 +1058,14 @@ impl Processor {
                 nodes.push(graph_node);
                 let link = if port.kind.is_input() {
                     GraphLink {
-                        source: format!("N{}P{}", port.node_id.val(), port.id.val()),
-                        target: format!("N{}", node.id().val()),
+                        source: format!("N{}P{}", port.node_id.0, port.id.0),
+                        target: format!("N{}", node.id().0),
                         value: None,
                     }
                 } else {
                     GraphLink {
-                        source: format!("N{}", node.id().val()),
-                        target: format!("N{}P{}", port.node_id.val(), port.id.val()),
+                        source: format!("N{}", node.id().0),
+                        target: format!("N{}P{}", port.node_id.0, port.id.0),
                         value: None,
                     }
                 };
@@ -1029,13 +1076,11 @@ impl Processor {
             let link = GraphLink {
                 source: format!(
                     "N{}P{}",
-                    connection.source.node_id.val(),
-                    connection.source.id.val()
+                    connection.source.node_id.0, connection.source.id.0
                 ),
                 target: format!(
                     "N{}P{}",
-                    connection.target.node_id.val(),
-                    connection.target.id.val()
+                    connection.target.node_id.0, connection.target.id.0
                 ),
                 value: None,
             };
@@ -1046,8 +1091,8 @@ impl Processor {
             let mut last_source = source;
             while let PortType::Proxy(port_proxy) = source.kind {
                 let link = GraphLink {
-                    source: format!("N{}P{}", port_proxy.node_id.val(), port_proxy.port_id.val()),
-                    target: format!("N{}P{}", source.node_id.val(), source.id.val()),
+                    source: format!("N{}P{}", port_proxy.node_id.0, port_proxy.port_id.0),
+                    target: format!("N{}P{}", source.node_id.0, source.id.0),
                     value: None,
                 };
                 links.push(link);
@@ -1061,8 +1106,8 @@ impl Processor {
             }
             if source != connection.source {
                 let link = GraphLink {
-                    source: format!("N{}P{}", source.node_id.val(), source.id.val()),
-                    target: format!("N{}P{}", last_source.node_id.val(), last_source.id.val()),
+                    source: format!("N{}P{}", source.node_id.0, source.id.0),
+                    target: format!("N{}P{}", last_source.node_id.0, last_source.id.0),
                     value: None,
                 };
                 links.push(link);

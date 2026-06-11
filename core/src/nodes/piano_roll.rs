@@ -1,8 +1,9 @@
+use std::ops::Range;
+
 use crate::{
     event::Event,
     node::{NodeBuilderTrait, NodeCtx, NodeInputs, NodeOutputs, NodeTrait},
     port::{PortId, PortProps, PortType},
-    time::ResolvedTimeRange,
 };
 
 #[derive(Clone)]
@@ -30,9 +31,7 @@ impl NodeBuilderTrait for PianoRollProps {
     fn build(&self, ctx: &mut NodeCtx) -> Box<dyn NodeTrait> {
         let mut props = self.clone();
         let sr = ctx.sample_rate();
-        props
-            .events
-            .sort_by(|a, b| a.time.to_samples(sr).cmp(&b.time.to_samples(sr)));
+        props.events.sort_by_key(|event| event.time.to_samples(sr));
         Box::new(PianoRoll::new(props))
     }
 }
@@ -51,14 +50,14 @@ impl PianoRoll {
 impl NodeTrait for PianoRoll {
     fn process(
         &mut self,
-        time_range: ResolvedTimeRange,
+        step_range: Range<usize>,
         _inputs: &NodeInputs,
         outputs: &mut NodeOutputs,
     ) {
-        let output_events = outputs
+        let mut output = outputs
             .get_events_mut(PianoRollProps::PORT_ID_OUTPUT)
             .unwrap();
-        output_events.update(time_range, self.props.events.as_slice());
+        output.update(step_range, self.props.events.as_slice());
     }
 
     fn port_props(&self) -> &[PortProps] {

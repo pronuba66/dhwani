@@ -55,8 +55,8 @@ export class OscNode implements Node {
 
   static portIdEvents: number = 0
   static portIdDuty: number = 1
-  static portIdFreq: number = 2
-  static portIdPhase: number = 3
+  static portIdPhase: number = 2
+  static portIdFreq: number = 3
   static portIdMul: number = 4
   static portIdOutput: number = 5
 }

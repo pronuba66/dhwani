@@ -1,8 +1,9 @@
+use std::ops::Range;
+
 use crate::{
     channel::{ChannelPosition, ChannelPositionsMask},
     node::{NodeBuilderTrait, NodeCtx, NodeInputs, NodeOutputs, NodeTrait},
     port::{PortId, PortProps, PortType},
-    time::ResolvedTimeRange,
 };
 
 #[derive(Clone)]
@@ -15,7 +16,12 @@ impl SimpleMixerProps {
     pub const PORT_ID_OUTPUT: PortId = PortId(0);
 
     #[must_use]
-    pub fn new(channel_mask: ChannelPositionsMask, muls: Vec<f32>) -> Self {
+    pub fn new(channel_mask: ChannelPositionsMask, mut muls: Vec<f32>) -> Self {
+        for mul in &mut muls {
+            if mul.is_nan() {
+                *mul = 0f32
+            }
+        }
         Self { channel_mask, muls }
     }
 
@@ -67,7 +73,7 @@ impl SimpleMixer {
 impl NodeTrait for SimpleMixer {
     fn process(
         &mut self,
-        time_range: ResolvedTimeRange,
+        step_range: Range<usize>,
         inputs: &NodeInputs,
         outputs: &mut NodeOutputs,
     ) {
@@ -80,8 +86,9 @@ impl NodeTrait for SimpleMixer {
             if let Some(input) = input {
                 for &ch in &self.chs {
                     if let Some(signal) = input.get(ch) {
-                        for (j, _) in time_range.into_iter().enumerate() {
-                            output.get_mut(ch).unwrap()[j] += signal[j] * self.props.muls[i];
+                        for (j, _) in step_range.clone().enumerate() {
+                            output.get_mut(ch).unwrap()[j] = signal[j]
+                                .mul_add(self.props.muls[i], output.get_mut(ch).unwrap()[j]);
                         }
                     }
                 }

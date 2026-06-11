@@ -43,8 +43,8 @@ pub struct Port2 {
 impl From<Port> for Port2 {
     fn from(value: Port) -> Self {
         Port2 {
-            id: value.id().val(),
-            node_id: value.node_id().val(),
+            id: value.id().0,
+            node_id: value.node_id().0,
             is_event: value.kind().is_event(),
             is_input: value.kind().is_input(),
             auto_connect: value.auto_connect(),
@@ -63,8 +63,8 @@ pub struct NodeInfo2 {
 impl From<NodeInfo> for NodeInfo2 {
     fn from(value: NodeInfo) -> Self {
         NodeInfo2 {
-            id: value.id.val(),
-            track_id: value.track_id.val(),
+            id: value.id.0,
+            track_id: value.track_id.0,
         }
     }
 }
@@ -88,7 +88,7 @@ pub async fn get_tracks<'a>(ctrl_sender: State<'a, CtrlSender>) -> Result<Vec<us
         .map(|mut tracks| {
             tracks
                 .drain(..)
-                .map(|track| track.id().val())
+                .map(|track| track.id().0)
                 .collect::<Vec<usize>>()
         })
         .map_err(err_to_string)
@@ -190,7 +190,7 @@ pub async fn add_track<'a>(
     ctrl_sender
         .add_track(TimeRange::new(start, end))
         .await
-        .map(|id| id.val())
+        .map(|id| id.0)
         .map_err(err_to_string)
 }
 
@@ -252,6 +252,12 @@ pub enum NodeProps {
     },
     Stereo,
     #[serde(rename_all = "camelCase")]
+    Delay {
+        n_channels: Option<u16>,
+        delay: f64,
+        mul: f32,
+    },
+    #[serde(rename_all = "camelCase")]
     Sampler {
         storage_id: usize,
     },
@@ -288,16 +294,19 @@ fn new_builder<'a>(
             _phase,
             mul,
         } => match mode.as_str() {
-            "Sine" => Ok(Box::new(nodes::OscProps::new_sin(
-                get_channel_mask(n_channels)?,
-                freq,
-                mul.unwrap_or_else(|| 1f32),
-            ))),
+            "Sine" => Ok(Box::new(
+                nodes::OscProps::new_sin(
+                    get_channel_mask(n_channels)?,
+                    freq * std::f32::consts::TAU,
+                    mul.unwrap_or_else(|| 1f32),
+                )
+                .map_err(err_to_string)?,
+            )),
             "Square" => Ok(Box::new(
                 nodes::OscProps::new_square(
                     get_channel_mask(n_channels)?,
                     ds.unwrap_or_else(|| 0.5f32),
-                    freq,
+                    freq * std::f32::consts::TAU,
                     mul.unwrap_or_else(|| 1f32),
                 )
                 .map_err(err_to_string)?,
@@ -306,7 +315,7 @@ fn new_builder<'a>(
                 nodes::OscProps::new_saw(
                     get_channel_mask(n_channels)?,
                     ds.unwrap_or_else(|| 0.5f32),
-                    freq,
+                    freq * std::f32::consts::TAU,
                     mul.unwrap_or_else(|| 1f32),
                 )
                 .map_err(err_to_string)?,
@@ -322,25 +331,33 @@ fn new_builder<'a>(
             mode,
             freq,
         } => match mode.as_str() {
-            "LPF" => Ok(Box::new(nodes::SimpleFilterProps::new_lpf(
-                get_channel_mask(n_channels)?,
-                freq,
-            ))),
-            "HPF" => Ok(Box::new(nodes::SimpleFilterProps::new_hpf(
-                get_channel_mask(n_channels)?,
-                freq,
-            ))),
-            "BPF" => Ok(Box::new(nodes::SimpleFilterProps::new_bpf(
-                get_channel_mask(n_channels)?,
-                freq,
-            ))),
-            "BSF" => Ok(Box::new(nodes::SimpleFilterProps::new_bsf(
-                get_channel_mask(n_channels)?,
-                freq,
-            ))),
+            "LPF" => Ok(Box::new(
+                nodes::SimpleFilterProps::new_lpf(get_channel_mask(n_channels)?, freq)
+                    .map_err(err_to_string)?,
+            )),
+            "HPF" => Ok(Box::new(
+                nodes::SimpleFilterProps::new_hpf(get_channel_mask(n_channels)?, freq)
+                    .map_err(err_to_string)?,
+            )),
+            "BPF" => Ok(Box::new(
+                nodes::SimpleFilterProps::new_bpf(get_channel_mask(n_channels)?, freq)
+                    .map_err(err_to_string)?,
+            )),
+            "BSF" => Ok(Box::new(
+                nodes::SimpleFilterProps::new_bsf(get_channel_mask(n_channels)?, freq)
+                    .map_err(err_to_string)?,
+            )),
             _ => Err("Invalid mode".into()),
         },
         NodeProps::Stereo => Ok(Box::new(nodes::StereoProps::default())),
+        NodeProps::Delay {
+            n_channels,
+            delay,
+            mul,
+        } => Ok(Box::new(
+            nodes::DelayProps::new(get_channel_mask(n_channels)?, TimeUnit::Seconds(delay), mul)
+                .map_err(err_to_string)?,
+        )),
         NodeProps::Sampler { storage_id } => {
             let info = {
                 let guard = storage.lock().unwrap();
@@ -390,7 +407,7 @@ pub async fn add_node<'a>(
     ctrl_sender
         .add_node(track_id.into(), new_builder(storage, props)?)
         .await
-        .map(|id| id.val())
+        .map(|id| id.0)
         .map_err(err_to_string)
 }
 

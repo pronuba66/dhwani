@@ -11,6 +11,7 @@ import { OscNode } from "./nodes/osc"
 import { SimpleFilterNode } from "./nodes/simple-filter"
 import { StereoNode } from "./nodes/stereo"
 import { PianoRollNode } from "./nodes/piano-roll"
+import { DelayNode } from "./nodes/delay"
 
 export interface AudioFileInfo {
   readonly id: number
@@ -136,6 +137,7 @@ export const nodeClasses: NodeClassWithDefault<any, any>[] = [
   SimpleMixerNode,
   SimpleFilterNode,
   StereoNode,
+  DelayNode,
   // PianoRoll, // Does not have default
   // SamplerNode, // Does not have default
 ]

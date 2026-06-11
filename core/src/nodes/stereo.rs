@@ -1,8 +1,9 @@
+use std::ops::Range;
+
 use crate::{
     channel::{ChannelPosition, ChannelPositionsMask},
     node::{NodeBuilderTrait, NodeCtx, NodeInputs, NodeOutputs, NodeTrait},
     port::{PortId, PortProps, PortType},
-    time::ResolvedTimeRange,
 };
 
 #[derive(Default, Clone)]
@@ -46,7 +47,7 @@ struct Stereo {}
 impl NodeTrait for Stereo {
     fn process(
         &mut self,
-        time_range: ResolvedTimeRange,
+        step_range: Range<usize>,
         inputs: &NodeInputs,
         outputs: &mut NodeOutputs,
     ) {
@@ -54,12 +55,12 @@ impl NodeTrait for Stereo {
             .get_signals_mut(StereoProps::PORT_ID_OUTPUT)
             .unwrap();
         let input = inputs.get_signals(StereoProps::PORT_ID_INPUT);
-        if let Some(input) = input {
-            if let Some(signal) = input.get(ChannelPosition::FrontLeft) {
-                for (i, _) in time_range.into_iter().enumerate() {
-                    output.get_mut(ChannelPosition::FrontLeft).unwrap()[i] += signal[i];
-                    output.get_mut(ChannelPosition::FrontRight).unwrap()[i] += signal[i];
-                }
+        if let Some(input) = input
+            && let Some(signal) = input.get(ChannelPosition::FrontLeft)
+        {
+            for (i, _) in step_range.enumerate() {
+                output.get_mut(ChannelPosition::FrontLeft).unwrap()[i] += signal[i];
+                output.get_mut(ChannelPosition::FrontRight).unwrap()[i] += signal[i];
             }
         }
     }

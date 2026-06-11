@@ -3,6 +3,7 @@
  */
 
 import type { NodeInfo, Port } from "./core"
+import { DelayNode, type DelayNodeProps } from "./nodes/delay"
 import { OscNode, type OscNodeProps } from "./nodes/osc"
 import { PianoRollNode, type PianoRollNodeProps } from "./nodes/piano-roll"
 import {
@@ -172,6 +173,10 @@ export class Faker {
         ports = OscNodeFaker.ports(id, props as unknown as OscNodeProps)
         break
       }
+      case DelayNode.tag: {
+        ports = DelayNodeFaker.ports(id, props as unknown as DelayNodeProps)
+        break
+      }
       default: {
         throw "Unknown node type"
       }
@@ -210,6 +215,10 @@ export class Faker {
       }
       case OscNode.tag: {
         ports = OscNodeFaker.ports(id, props as unknown as OscNodeProps)
+        break
+      }
+      case DelayNode.tag: {
+        ports = DelayNodeFaker.ports(id, props as unknown as DelayNodeProps)
         break
       }
       default: {
@@ -313,20 +322,20 @@ class OscNodeFaker {
         name: "Events",
       },
       {
-        id: OscNode.portIdFreq,
-        nodeId,
-        isEvent: false,
-        isInput: true,
-        autoConnect: false,
-        name: "Frequency",
-      },
-      {
         id: OscNode.portIdPhase,
         nodeId,
         isEvent: false,
         isInput: true,
         autoConnect: false,
         name: "Phase",
+      },
+      {
+        id: OscNode.portIdFreq,
+        nodeId,
+        isEvent: false,
+        isInput: true,
+        autoConnect: false,
+        name: "Frequency",
       },
       {
         id: OscNode.portIdMul,
@@ -355,6 +364,31 @@ class OscNodeFaker {
         name: "Duty Cycle",
       })
     }
+    return ports
+  }
+}
+
+class DelayNodeFaker {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  static ports(nodeId: number, props: DelayNodeProps): Port[] {
+    const ports: Port[] = [
+      {
+        id: DelayNode.portIdInput,
+        nodeId,
+        isEvent: false,
+        isInput: true,
+        autoConnect: true,
+        name: "Input",
+      },
+      {
+        id: DelayNode.portIdOutput,
+        nodeId,
+        isEvent: false,
+        isInput: false,
+        autoConnect: true,
+        name: "Output",
+      },
+    ]
     return ports
   }
 }

@@ -18,7 +18,7 @@ impl SingalsFrame {
         Self { signals }
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub(crate) fn reset(&mut self) {
         for (_, buffer) in &mut self.signals {
             buffer.fill(0f32);
         }
@@ -31,20 +31,22 @@ pub struct SignalsMut<'a> {
 }
 
 impl<'a> SignalsMut<'a> {
-    pub(crate) fn new(range: Range<usize>, frame: &'a mut SingalsFrame) -> Self {
+    pub(crate) const fn new(range: Range<usize>, frame: &'a mut SingalsFrame) -> Self {
         Self { range, frame }
     }
 
-    pub fn n_channels(&self) -> u16 {
+    #[must_use]
+    pub const fn n_channels(&self) -> u16 {
         self.frame.signals.len() as u16
     }
 
     pub fn clear(&mut self) {
-        for (_, buffer) in self.frame.signals.iter_mut() {
+        for (_, buffer) in &mut self.frame.signals {
             buffer[self.range.clone()].fill(0f32);
         }
     }
 
+    #[must_use]
     pub fn get(&self, ch: ChannelPosition) -> Option<&[f32]> {
         self.frame
             .signals
@@ -54,14 +56,6 @@ impl<'a> SignalsMut<'a> {
     }
 
     pub fn get_mut(&mut self, ch: ChannelPosition) -> Option<&mut [f32]> {
-        let is_none = { self.frame.signals.iter().find(|(c, _)| *c == ch).is_none() };
-        if is_none {
-            println!("HERE, {}", self.frame.signals.len());
-            for (ch, _) in self.frame.signals.iter() {
-                println!("{:?}", ch);
-            }
-            println!("End");
-        }
         self.frame
             .signals
             .iter_mut()
@@ -76,14 +70,17 @@ pub struct Signals<'a> {
 }
 
 impl<'a> Signals<'a> {
-    pub(crate) fn new(range: Range<usize>, frame: &'a SingalsFrame) -> Self {
+    pub(crate) const fn new(range: Range<usize>, frame: &'a SingalsFrame) -> Self {
         Self { range, frame }
     }
 
-    pub fn n_channels(&self) -> u16 {
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub const fn n_channels(&self) -> u16 {
         self.frame.signals.len() as u16
     }
 
+    #[must_use]
     pub fn get(&self, ch: ChannelPosition) -> Option<&[f32]> {
         self.frame
             .signals

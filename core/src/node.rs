@@ -6,28 +6,16 @@ use std::{collections::HashMap, fmt::Debug, ops::Range};
 use crate::{
     Error, Processor,
     connection::Connection,
-    event::Events,
+    event::{Events, EventsMut},
     frame::Frame,
     port::{Port, PortId, PortProps, PortType},
     signal::{Signals, SignalsMut},
-    time::{ResolvedTimeRange, TimeUnit},
+    time::{SampleBaseType, SampleRateBaseType, TimeUnit},
     track::TrackId,
 };
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
-pub struct NodeId(pub(crate) usize);
-
-impl NodeId {
-    #[must_use]
-    pub const fn new(id: usize) -> Self {
-        Self(id)
-    }
-
-    #[must_use]
-    pub const fn val(self) -> usize {
-        self.0
-    }
-}
+pub struct NodeId(pub usize);
 
 impl From<usize> for NodeId {
     fn from(value: usize) -> Self {
@@ -72,11 +60,21 @@ impl<'a> NodeCtx<'a> {
         self.processor.buffer_size()
     }
 
+    /// Add node as a child node
+    ///
+    /// # Errors
+    /// [`Processor::add_node_with_parent`] returns error if track id is not null
+    /// Since track is never null, this should not throw any error
+    /// But kept as [`Result`] for future
     pub fn add_node(&mut self, builder: &dyn NodeBuilderTrait) -> Result<NodeId, Error> {
         self.processor
             .add_node_with_parent(self.track_id, Some(self.id), builder)
     }
 
+    /// Connect node
+    ///
+    /// # Errors
+    /// Returns error if soure or target are not child nodes
     pub fn connect_nodes(&mut self, source_id: NodeId, target_id: NodeId) -> Result<(), Error> {
         // Source and Target nodes need to be child of current node
         if !self.processor.is_child(self.id, source_id) {
@@ -88,6 +86,10 @@ impl<'a> NodeCtx<'a> {
         self.processor.connect_nodes(source_id, target_id)
     }
 
+    /// Connect ports
+    ///
+    /// # Errors
+    /// Returns error if soure or target are not child nodes
     pub fn connect_ports(
         &mut self,
         (source_node_id, source_port_id): (NodeId, PortId),
@@ -134,25 +136,33 @@ impl<'a> NodeCtx<'a> {
     }
 }
 
+pub struct NodeResetCtx {
+    pub sample_rate: SampleRateBaseType,
+    pub step: SampleBaseType,
+}
+
 /// Mutable output frames provided to [`NodeTrait::process`]
 pub struct NodeOutputs<'a> {
+    sr: SampleRateBaseType,
     range: Range<usize>,
     frames: &'a mut HashMap<PortId, Frame>,
 }
 
 impl<'a> NodeOutputs<'a> {
     #[must_use]
-    pub(crate) const fn new(range: Range<usize>, frames: &'a mut HashMap<PortId, Frame>) -> Self {
-        Self { range, frames }
+    pub(crate) const fn new(
+        sr: SampleRateBaseType,
+        range: Range<usize>,
+        frames: &'a mut HashMap<PortId, Frame>,
+    ) -> Self {
+        Self { sr, range, frames }
     }
 
-    pub fn clear_buffers(&mut self) {
+    pub fn clear(&mut self) {
         for frame in self.frames.values_mut() {
             // Do not clear Events as current state depends on previous states
             if let Frame::Signals(frame) = frame {
-                for (_, buffer) in &mut frame.signals {
-                    buffer[self.range.clone()].fill(0f32);
-                }
+                frame.reset();
             }
         }
     }
@@ -161,10 +171,10 @@ impl<'a> NodeOutputs<'a> {
     ///
     /// Returns None if port not available or port is not a [`Events`]
     ///
-    pub fn get_events_mut(&mut self, port_id: PortId) -> Option<&mut Events> {
+    pub fn get_events_mut(&mut self, port_id: PortId) -> Option<EventsMut<'_>> {
         self.frames
             .get_mut(&port_id)
-            .and_then(|frame| frame.get_events_mut())
+            .and_then(|frame| frame.get_events_mut(self.sr))
     }
 
     /// Attempts to get the mutable buffer for `port_id`
@@ -180,6 +190,7 @@ impl<'a> NodeOutputs<'a> {
 
 /// Input frames provided to [`NodeTrait::process`]
 pub struct NodeInputs<'a> {
+    sr: SampleRateBaseType,
     range: Range<usize>,
     frames_maps: &'a HashMap<NodeId, HashMap<PortId, Frame>>,
     id: NodeId,
@@ -189,12 +200,14 @@ pub struct NodeInputs<'a> {
 impl<'a> NodeInputs<'a> {
     #[must_use]
     pub(crate) const fn new(
+        sr: SampleRateBaseType,
         range: Range<usize>,
         frames_maps: &'a HashMap<NodeId, HashMap<PortId, Frame>>,
         id: NodeId,
         connections_map: &'a HashMap<(NodeId, PortId), Connection>,
     ) -> Self {
         Self {
+            sr,
             range,
             frames_maps,
             id,
@@ -207,7 +220,7 @@ impl<'a> NodeInputs<'a> {
     /// Returns None if port not available or port is not a [`Events`]
     ///
     #[must_use]
-    pub fn get_events(&self, port_id: PortId) -> Option<&Events> {
+    pub fn get_events(&self, port_id: PortId) -> Option<Events<'_>> {
         self.connections_map
             .get(&(self.id, port_id))
             .and_then(|connection| {
@@ -215,7 +228,7 @@ impl<'a> NodeInputs<'a> {
                     .get(&connection.source.node_id)
                     .and_then(|frames| frames.get(&connection.source.id))
             })
-            .and_then(|frame| frame.get_events())
+            .and_then(|frame| frame.get_events(self.sr))
     }
 
     /// Attempts to get the buffer for `port_id`
@@ -235,6 +248,7 @@ impl<'a> NodeInputs<'a> {
     }
 
     /// Attempts to get the mono buffer
+    #[must_use]
     pub fn get_mono(&self, port_id: PortId) -> Option<&[f32]> {
         self.connections_map
             .get(&(self.id, port_id))
@@ -254,14 +268,18 @@ pub trait NodeBuilderTrait: Sync + Send {
 
 /// Nodes are defined by [`NodeTrait`]
 pub trait NodeTrait {
-    fn process(
-        &mut self,
-        time_range: ResolvedTimeRange,
-        inputs: &NodeInputs,
-        outputs: &mut NodeOutputs,
-    );
+    fn process(&mut self, step_range: Range<usize>, inputs: &NodeInputs, outputs: &mut NodeOutputs);
     #[allow(unused_variables)]
-    fn reset(&mut self, time_unit: TimeUnit) {}
+    /// Reset happened when there is discontinuity so that node can adjust cumulative
+    /// parameters
+    /// Always called when node is built
+    fn reset(&mut self, ctx: &NodeResetCtx) {}
+    /// This is for keeping the node relevant event after the track end time
+    /// Example delay node need extra
+    /// None mean end is infinite
+    fn duration_extension(&self) -> Option<TimeUnit> {
+        Some(TimeUnit::Samples(0))
+    }
     fn port_props(&self) -> &[PortProps];
     fn name(&self) -> &str;
 }
@@ -292,9 +310,24 @@ impl Node {
         parent_id: Option<NodeId>,
         builder: &dyn NodeBuilderTrait,
     ) -> Result<NodeId, Error> {
+        if !processor.tracks_map.contains_key(&track_id) {
+            return Err(Error::msg("Track not found".into()));
+        }
         let id: NodeId = processor.new_id().into();
         let mut ctx = NodeCtx::new(processor, id, track_id);
-        let inner = builder.build(&mut ctx);
+        let mut inner = builder.build(&mut ctx);
+        let ctx = NodeResetCtx {
+            sample_rate: processor.sample_rate(),
+            step: processor.step
+                - processor
+                    .tracks_map
+                    .get(&track_id)
+                    .unwrap()
+                    .time_range()
+                    .start()
+                    .to_samples(processor.sample_rate()),
+        };
+        inner.reset(&ctx);
         let mut ports = Vec::<Port>::with_capacity(inner.port_props().len());
         for port_props in inner.port_props() {
             ports.push(Port::new(
@@ -343,7 +376,19 @@ impl Node {
         let track_id = old_node.track_id;
         let parent_id = old_node.parent_id;
         let mut ctx = NodeCtx::new(processor, id, track_id);
-        let inner = builder.build(&mut ctx);
+        let mut inner = builder.build(&mut ctx);
+        let ctx = NodeResetCtx {
+            sample_rate: processor.sample_rate(),
+            step: processor.step
+                - processor
+                    .tracks_map
+                    .get(&track_id)
+                    .unwrap()
+                    .time_range()
+                    .start()
+                    .to_samples(processor.sample_rate()),
+        };
+        inner.reset(&ctx);
         let mut ports = Vec::<Port>::with_capacity(inner.port_props().len());
         for port_props in inner.port_props() {
             ports.push(Port::new(
@@ -430,6 +475,6 @@ impl Node {
 
 impl Debug for Node {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{{name: \"{}\", id: {:?}}}", self.inner.name(), self.id,)
+        write!(f, "{{name: \"{}\", id: {:?}}}", self.inner.name(), self.id)
     }
 }
