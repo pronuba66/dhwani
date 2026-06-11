@@ -83,8 +83,10 @@
 mod connection;
 mod errors;
 mod frame;
-mod midi_consts;
 mod processor;
+mod midi_consts {
+    include!(concat!(env!("OUT_DIR"), "/midi_consts.rs"));
+}
 
 // Public
 

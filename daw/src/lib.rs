@@ -27,7 +27,7 @@ pub fn run() -> Result<(), anyhow::Error> {
     println!("Output config : {config:?}");
     let (ctrl_sender, ctrl_receiver) =
         start_controller(sample_rate, default_config.channels(), 1024);
-    let stream = make_stream(&device, &config.into(), ctrl_receiver)?;
+    let stream = make_stream(&device, config.into(), ctrl_receiver)?;
     stream.pause()?;
     let storage = Storage::default();
     tauri::Builder::default()
@@ -75,7 +75,7 @@ pub fn run() -> Result<(), anyhow::Error> {
 
 pub fn make_stream(
     device: &cpal::Device,
-    config: &cpal::StreamConfig,
+    config: cpal::StreamConfig,
     ctrl_receiver: CtrlRingBufReceiver,
 ) -> Result<cpal::Stream, anyhow::Error> {
     let stream: cpal::Stream = device.build_output_stream(

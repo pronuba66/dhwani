@@ -1,10 +1,16 @@
 [package]
 name = "dhwani"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Joseph George Stephen <pronuba66@gmail.com>"]
 description = "A real-time audio processing engine for DAWs"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/pronuba66/dhwani"
+homepage = "https://github.com/pronuba66/dhwani"
+documentation = "https://docs.rs/dhwani"
+readme = "../README.md"
+keywords = ["audio", "daw"]
+categories = ["multimedia::audio"]
 
 [[example]]
 name = "gui"
@@ -17,7 +23,7 @@ debug = ["charming"]
 
 [dev-dependencies]
 anyhow = "1.0.102"
-cpal = "0.17.3"
+cpal = "0.18.1"
 crossbeam-channel = "0.5.15"
 crossbeam-queue = "0.3.12"
 eframe = "0.34.3"

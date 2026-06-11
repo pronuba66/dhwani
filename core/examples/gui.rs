@@ -347,7 +347,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let (ctrl_sender, ctrl_receiver) =
         start_controller(sample_rate, default_config.channels(), 1024);
     let (sender, receiver) = bounded::<Vec<f32>>(1);
-    let stream = make_stream(&device, &config.into(), sender, ctrl_receiver)?;
+    let stream = make_stream(&device, config.into(), sender, ctrl_receiver)?;
     println!("Stream playing...");
     let _ = stream.play();
     let options = eframe::NativeOptions::default();
@@ -369,7 +369,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
 pub fn make_stream(
     device: &cpal::Device,
-    config: &cpal::StreamConfig,
+    config: cpal::StreamConfig,
     sender: Sender<Vec<f32>>,
     ctrl_receiver: CtrlRingBufReceiver,
 ) -> Result<cpal::Stream, anyhow::Error> {
