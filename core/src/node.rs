@@ -318,14 +318,7 @@ impl Node {
         let mut inner = builder.build(&mut ctx);
         let ctx = NodeResetCtx {
             sample_rate: processor.sample_rate(),
-            step: processor.step
-                - processor
-                    .tracks_map
-                    .get(&track_id)
-                    .unwrap()
-                    .time_range()
-                    .start()
-                    .to_samples(processor.sample_rate()),
+            step: processor.step - processor.tracks_map.get(&track_id).unwrap().start_step(),
         };
         inner.reset(&ctx);
         let mut ports = Vec::<Port>::with_capacity(inner.port_props().len());
@@ -379,14 +372,7 @@ impl Node {
         let mut inner = builder.build(&mut ctx);
         let ctx = NodeResetCtx {
             sample_rate: processor.sample_rate(),
-            step: processor.step
-                - processor
-                    .tracks_map
-                    .get(&track_id)
-                    .unwrap()
-                    .time_range()
-                    .start()
-                    .to_samples(processor.sample_rate()),
+            step: processor.step - processor.tracks_map.get(&track_id).unwrap().start_step(),
         };
         inner.reset(&ctx);
         let mut ports = Vec::<Port>::with_capacity(inner.port_props().len());

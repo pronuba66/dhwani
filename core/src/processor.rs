@@ -144,7 +144,7 @@ pub struct Processor {
     nodes: Vec<NodeId>,
     // Final port
     output_port: Option<Port>,
-    end_time: SampleBaseType,
+    end_step: SampleBaseType,
     invalidate: bool,
     fader: Fader,
 }
@@ -172,7 +172,7 @@ impl Processor {
             compiled_connections_map: HashMap::with_capacity(Self::CONNECTIONS_MAP_CAPACITY),
             nodes: vec![],
             output_port: None,
-            end_time: 0 as SampleBaseType,
+            end_step: 0 as SampleBaseType,
             invalidate: true,
             fader: Fader::new(
                 FadeMode::In,
@@ -339,33 +339,19 @@ impl Processor {
             self.recompile_graph();
             self.invalidate = false;
         }
-        let start_sample = self.step;
-        let end_sample = start_sample + chunk as SampleBaseType;
+        let start_step = self.step;
+        let end_step = start_step + chunk as SampleBaseType;
         for i in 0..self.nodes.len() {
             let node_id = self.nodes[i];
             // Temporarly take the item from hashmap
             let mut node = self.nodes_map.remove(&node_id).unwrap();
             // Compute time related
-            let (track_start_sample, track_end_sample) = {
-                let time_range = self.tracks_map.get(&node.track_id()).unwrap().time_range();
-                (
-                    time_range.start().to_samples(self.sr),
-                    time_range
-                        .end()
-                        .map_or_else(|| end_sample, |t| t.to_samples(self.sr)),
-                )
-            };
-            // Add duration extension from node
-            let track_end_sample = node.inner.duration_extension().map_or_else(
-                || end_sample, // Keep it at max if None
-                |time| {
-                    // Lets not take negative extension
-                    track_end_sample + time.to_samples(self.sr).max(0)
-                },
-            );
-            let new_start_sample = start_sample.max(track_start_sample);
-            let new_end_sample = end_sample.min(track_end_sample);
-            if new_start_sample >= new_end_sample {
+            let track = self.tracks_map.get(&node.track_id()).unwrap();
+            let track_start_step = track.start_step();
+            let track_end_step = track.end_step().unwrap_or(end_step);
+            let new_start_step = start_step.max(track_start_step);
+            let new_end_step = end_step.min(track_end_step);
+            if new_start_step >= new_end_step {
                 // Clear frame if not invalidated.
                 // Lets say a node A is from time [a,b) and  node B is from [c,d)
                 // where [a,b) < [c,d) and A is connected to B. When processing B,
@@ -383,12 +369,12 @@ impl Processor {
             let frame_range = {
                 // Frame rang is the range for which the frames are relevant
                 // for the current session of processing
-                debug_assert!(new_start_sample - start_sample >= 0);
-                debug_assert!(new_end_sample - start_sample >= 0);
+                debug_assert!(new_start_step - start_step >= 0);
+                debug_assert!(new_end_step - start_step >= 0);
                 #[allow(clippy::cast_possible_truncation)]
                 #[allow(clippy::cast_sign_loss)]
-                let frame_range_start = (new_start_sample - start_sample) as usize;
-                let frame_range_end = (new_end_sample - start_sample) as usize;
+                let frame_range_start = (new_start_step - start_step) as usize;
+                let frame_range_end = (new_end_step - start_step) as usize;
                 frame_range_start..frame_range_end
             };
             // Temporarly take the item from hashmap
@@ -405,12 +391,12 @@ impl Processor {
             let step_range = {
                 // Step range is the range iterator sent to process the nodes,
                 // It will a range with the track start time as base
-                debug_assert!(new_start_sample - track_start_sample >= 0);
-                debug_assert!(new_end_sample - track_start_sample >= 0);
+                debug_assert!(new_start_step - track_start_step >= 0);
+                debug_assert!(new_end_step - track_start_step >= 0);
                 #[allow(clippy::cast_possible_truncation)]
                 #[allow(clippy::cast_sign_loss)]
-                let step_range_start = (new_start_sample - track_start_sample) as usize;
-                let step_range_end = (new_end_sample - track_start_sample) as usize;
+                let step_range_start = (new_start_step - track_start_step) as usize;
+                let step_range_end = (new_end_step - track_start_step) as usize;
                 step_range_start..step_range_end
             };
             node.inner
@@ -427,7 +413,7 @@ impl Processor {
                 .unwrap()
                 .get(&output_port.id)
                 .unwrap()
-                .get_signals(0..((end_sample - start_sample) as usize))
+                .get_signals(0..((end_step - start_step) as usize))
                 .unwrap();
             if let Some(signal) = signals.get(ChannelPosition::FrontLeft) {
                 let mut fader = self.fader.into_iter();
@@ -445,7 +431,7 @@ impl Processor {
             }
         }
         self.process_fader(chunk);
-        self.step = end_sample;
+        self.step = end_step;
         Ok(n_channels * chunk)
     }
 
@@ -496,12 +482,26 @@ impl Processor {
     fn recompile_graph(&mut self) {
         self.nodes = Vec::<NodeId>::with_capacity(self.nodes_map.len());
         let mut node_status = HashSet::<NodeId>::with_capacity(self.nodes_map.len());
-        self.end_time = 0;
+        // Update start and end steps of track
+        for node in self.nodes_map.values() {
+            let track = self.tracks_map.get_mut(&node.track_id()).unwrap();
+            let time_range = track.time_range();
+            track.set_start_step(time_range.start().to_samples(self.sr));
+            let end_step = time_range
+                .end()
+                .map(|time| time.to_samples(self.sr))
+                .and_then(|step| {
+                    node.inner
+                        .duration_extension()
+                        .map(|time| step + time.to_samples(self.sr))
+                });
+            track.set_end_step(end_step);
+        }
+        self.end_step = 0;
         for track in self.tracks_map.values() {
-            if let Some(end) = track.time_range().end() {
-                let end_time = end.to_samples(self.sr);
+            if let Some(end_step) = track.end_step() {
                 // Set end time the maximum
-                self.end_time = end_time.max(self.end_time);
+                self.end_step = self.end_step.max(end_step);
             }
         }
         self.recompile_connections();
@@ -898,7 +898,7 @@ impl Processor {
                 self.step += time.to_samples(self.sr);
             }
             TimeFrom::End(time) => {
-                self.step = self.end_time + time.to_samples(self.sr);
+                self.step = self.end_step + time.to_samples(self.sr);
             }
         }
         if self.step != last_step {

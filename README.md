@@ -1,6 +1,8 @@
 
 # Dhwani
 
+[![Crates.io](https://img.shields.io/crates/v/dhwani.svg)](https://crates.io/crates/dhwani) [![docs.rs](https://docs.rs/dhwani/badge.svg)](https://docs.rs/dhwani/)
+
 **Dhwani** is a real-time node based audio engine for Digital Audio Workstations (DAWs), written in Rust and designed for low-latency sound processing. It focuses on performance, modular DSP building blocks, and efficient I/O for modern audio applications. The engine is built to power synthesizers, mixers, effects chains, and full DAW backends while maintaining Rust’s guarantees for safety and concurrency.
 
 ## Meaning
