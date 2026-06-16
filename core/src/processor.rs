@@ -7,12 +7,10 @@ use crate::{
     Error,
     channel::ChannelPosition,
     connection::Connection,
-    event::EventsFrame,
     frame::Frame,
     node::{Node, NodeBuilderTrait, NodeId, NodeInputs, NodeOutputs, NodeResetCtx},
     nodes::NodeInfo,
     port::{Port, PortId, PortType},
-    signal::SingalsFrame,
     time::{SampleBaseType, SampleRateBaseType, TimeFrom, TimeRange, TimeUnit},
     track::{Track, TrackId},
 };
@@ -131,7 +129,7 @@ pub struct Processor {
     sr: SampleRateBaseType,
     n_channels: u16,
     buffer_size: usize,
-    pub step: SampleBaseType,
+    step: SampleBaseType,
     id: usize,
     pub(crate) nodes_map: HashMap<NodeId, Node>,
     pub(crate) tracks_map: HashMap<TrackId, Track>,
@@ -154,7 +152,7 @@ impl Processor {
     const NODES_MAP_CAPACITY: usize = 512;
     const CONNECTIONS_MAP_CAPACITY: usize = 1024;
     const FRAMES_MAPS_CAPACITY: usize = 1024;
-    const FADE_DURATION: f64 = 0.020f64; // 20ms
+    const FADE_DURATION: f32 = 0.020f32; // 20ms
 
     #[must_use]
     pub fn new(sr: SampleRateBaseType, n_channels: u16, buffer_size: usize) -> Self {
@@ -252,25 +250,6 @@ impl Processor {
         }
     }
 
-    pub(crate) fn build_frames(&self, node: &Node) -> HashMap<PortId, Frame> {
-        let mut frames: HashMap<PortId, Frame> = HashMap::<PortId, Frame>::new();
-        for port in node.ports() {
-            match port.kind {
-                PortType::EventsIn | PortType::SignalIn | PortType::Proxy(_) => {}
-                PortType::EventsOut => {
-                    // Lets keep minimum of 64 events per frame
-                    let frame = Frame::Events(EventsFrame::new(self.min_events_per_frame()));
-                    frames.insert(port.id, frame);
-                }
-                PortType::SignalOut(channel_mask) => {
-                    let frame = Frame::Signals(SingalsFrame::new(channel_mask, self.buffer_size));
-                    frames.insert(port.id, frame);
-                }
-            }
-        }
-        frames
-    }
-
     fn reset_frames(&mut self, id: NodeId) {
         if let Some(frames) = self.frames_maps.get_mut(&id) {
             for frame in frames.values_mut() {
@@ -347,8 +326,12 @@ impl Processor {
             let mut node = self.nodes_map.remove(&node_id).unwrap();
             // Compute time related
             let track = self.tracks_map.get(&node.track_id()).unwrap();
-            let track_start_step = track.start_step();
-            let track_end_step = track.end_step().unwrap_or(end_step);
+            let track_start_step = track.time_range().start().to_samples(self.sr);
+            let track_end_step = track
+                .time_range()
+                .end()
+                .map(|time| time.to_samples(self.sr))
+                .unwrap_or(end_step);
             let new_start_step = start_step.max(track_start_step);
             let new_end_step = end_step.min(track_end_step);
             if new_start_step >= new_end_step {
@@ -482,26 +465,11 @@ impl Processor {
     fn recompile_graph(&mut self) {
         self.nodes = Vec::<NodeId>::with_capacity(self.nodes_map.len());
         let mut node_status = HashSet::<NodeId>::with_capacity(self.nodes_map.len());
-        // Update start and end steps of track
-        for node in self.nodes_map.values() {
-            let track = self.tracks_map.get_mut(&node.track_id()).unwrap();
-            let time_range = track.time_range();
-            track.set_start_step(time_range.start().to_samples(self.sr));
-            let end_step = time_range
-                .end()
-                .map(|time| time.to_samples(self.sr))
-                .and_then(|step| {
-                    node.inner
-                        .duration_extension()
-                        .map(|time| step + time.to_samples(self.sr))
-                });
-            track.set_end_step(end_step);
-        }
         self.end_step = 0;
         for track in self.tracks_map.values() {
-            if let Some(end_step) = track.end_step() {
+            if let Some(end_step) = track.time_range().end() {
                 // Set end time the maximum
-                self.end_step = self.end_step.max(end_step);
+                self.end_step = self.end_step.max(end_step.to_samples(self.sr));
             }
         }
         self.recompile_connections();
@@ -809,11 +777,6 @@ impl Processor {
         self.nodes_map.get(&id)
     }
 
-    #[must_use]
-    pub fn min_events_per_frame(&self) -> usize {
-        (self.buffer_size() / 2).max(64)
-    }
-
     pub fn clear(&mut self) {
         self.reset();
         self.invalidate = true;
@@ -888,7 +851,7 @@ impl Processor {
     }
 
     #[must_use]
-    pub fn seek(&mut self, time: TimeFrom) -> f64 {
+    pub fn seek(&mut self, time: TimeFrom) -> f32 {
         let last_step = self.step;
         match time {
             TimeFrom::Start(time) => {
@@ -925,6 +888,11 @@ impl Processor {
             }
         }
         TimeUnit::Samples(self.step).to_seconds(self.sr)
+    }
+
+    #[must_use]
+    pub const fn step(&self) -> SampleBaseType {
+        self.step
     }
 
     #[must_use]
@@ -1138,5 +1106,116 @@ impl Processor {
             );
         let mut renderer = HtmlRenderer::new("Dhwani - Graph", 1920, 1080);
         renderer.save(&chart, path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs::File, io::Write};
+
+    use crate::{channel::ChannelPositionsMask, event, events, midi_note::MidiNote, nodes};
+
+    use super::*;
+
+    #[test]
+    fn continuity_test() {
+        const SAMPLE_RATE: SampleRateBaseType = 44100;
+        const N_CHANNELS: u16 = 1;
+        const BUFFER_SIZE: usize = 1024;
+        let mut processor = Processor::new(SAMPLE_RATE, N_CHANNELS, BUFFER_SIZE);
+        // Create track 0
+        let track_0_id = processor
+            .add_track(TimeRange::new(TimeUnit::Seconds(0f32), None))
+            .unwrap();
+        let events = events![
+            (
+                0,
+                TimeUnit::Seconds(0f32),
+                event::EventData::NoteOn {
+                    note: MidiNote::from_midi_str("C4").unwrap(), // C4
+                    vel: 1f32,
+                }
+            ),
+            (
+                0,
+                TimeUnit::Seconds(1f32),
+                event::EventData::NoteOff {
+                    note: MidiNote::from_midi_str("C4").unwrap(), // C4
+                    vel: 1f32,
+                }
+            ),
+            (
+                1, // Since previous note ends, reusing the same event id
+                TimeUnit::Seconds(2f32),
+                event::EventData::NoteOn {
+                    note: MidiNote::from_midi_str("D4").unwrap(), // D4
+                    vel: 1f32,
+                }
+            ),
+            (
+                1,
+                TimeUnit::Seconds(4f32),
+                event::EventData::NoteOff {
+                    note: MidiNote::from_midi_str("D4").unwrap(), // D4
+                    vel: 1f32,
+                }
+            ),
+            (
+                2,
+                TimeUnit::Seconds(5f32),
+                event::EventData::NoteOn {
+                    note: MidiNote::from_midi_str("E4").unwrap(), // E4
+                    vel: 1f32,
+                }
+            ),
+            (
+                2,
+                TimeUnit::Seconds(20f32),
+                event::EventData::NoteOff {
+                    note: MidiNote::from_midi_str("E4").unwrap(), // E4
+                    vel: 1f32,
+                }
+            ),
+        ];
+        let piano_roll_node_id = processor
+            .add_node(track_0_id, &nodes::PianoRollProps::new(events))
+            .expect("Failed to create piano roll node");
+        let sin_node_w = 440f32 * std::f32::consts::TAU;
+        let sin_node_id = processor
+            .add_node(
+                track_0_id,
+                &nodes::OscProps::new_saw(
+                    ChannelPositionsMask::FRONT_LEFT,
+                    0.25,
+                    sin_node_w,
+                    0.5f32,
+                )
+                .unwrap(),
+            )
+            .expect("Failed to create sine node");
+
+        let _ = processor.connect_nodes(piano_roll_node_id, sin_node_id);
+        processor
+            .set_output_port(Some((sin_node_id, nodes::OscProps::PORT_ID_OUTPUT)))
+            .expect("Failed to set output port");
+        processor.set_playing(true);
+
+        let mut file = File::create("../target/continuity_test.raw").expect("create failed");
+        let mut file_buffer = vec![0u8; BUFFER_SIZE * 4];
+        let mut buffer = [0f32; BUFFER_SIZE];
+        loop {
+            let processed = processor.process(&mut buffer).expect("Process failed");
+            let time = (processor.step() as f64 / f64::from(processor.sample_rate())) as f32;
+            if time >= 8f32 {
+                break;
+            }
+            // Write to file
+            // Verify RAW file with Audacity
+            file_buffer.clear();
+            for o in &buffer[0..processed] {
+                file_buffer.extend_from_slice(&(*o).to_le_bytes());
+            }
+            file.write_all(&file_buffer).expect("Failed");
+        }
     }
 }

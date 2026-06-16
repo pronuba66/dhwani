@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 /// Time in seconds base type
-pub type TimeBaseType = f64;
+pub type TimeBaseType = f32;
 /// Sample base type
 pub type SampleBaseType = i64;
 /// Sample rate base type
@@ -89,11 +89,11 @@ impl TimeUnit {
     pub fn to_seconds(self, sr: SampleRateBaseType) -> TimeBaseType {
         match self {
             Self::Seconds(seconds) => seconds,
-            Self::Samples(samples) => samples as f64 / f64::from(sr),
+            Self::Samples(samples) => (samples as f64 / f64::from(sr)) as TimeBaseType,
             Self::Steps { steps, ts, bpm } => {
                 // steps * (60 / bpm) * (4 / den)
-                let steps = steps as f64;
-                let seconds_per_beat = (4f64 * (60f64 / f64::from(bpm))) / f64::from(ts.den); // BPM is in quater notes per minute
+                let steps = steps as f32;
+                let seconds_per_beat = (4f32 * (60f32 / bpm)) / f32::from(ts.den); // BPM is in quater notes per minute
                 steps * seconds_per_beat
             }
         }
@@ -102,7 +102,7 @@ impl TimeUnit {
     #[must_use]
     pub fn to_samples(self, sr: SampleRateBaseType) -> SampleBaseType {
         match self {
-            Self::Seconds(seconds) => (seconds * f64::from(sr)).round() as i64,
+            Self::Seconds(seconds) => (seconds as f64 * f64::from(sr)).round() as i64,
             Self::Samples(samples) => samples,
             Self::Steps {
                 steps: _,

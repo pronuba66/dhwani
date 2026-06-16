@@ -32,29 +32,15 @@ impl SimpleMixerProps {
 }
 
 impl NodeBuilderTrait for SimpleMixerProps {
-    fn build(&self, _ctx: &mut NodeCtx) -> Box<dyn NodeTrait> {
-        Box::new(SimpleMixer::new(self.clone()))
-    }
-}
-
-struct SimpleMixer {
-    chs: Vec<ChannelPosition>,
-    props: SimpleMixerProps,
-    port_props: Vec<PortProps>,
-}
-
-impl SimpleMixer {
-    #[must_use]
-    fn new(props: SimpleMixerProps) -> Self {
-        let chs = Vec::<ChannelPosition>::from(props.channel_mask);
-        let mut port_props = Vec::<PortProps>::with_capacity(1 + props.muls.len());
+    fn build(&self, ctx: &mut NodeCtx) -> Box<dyn NodeTrait> {
+        let mut port_props = Vec::<PortProps>::with_capacity(1 + self.muls.len());
         port_props.push(PortProps {
             id: SimpleMixerProps::PORT_ID_OUTPUT,
-            kind: PortType::SignalOut(props.channel_mask),
+            kind: PortType::SignalOut(self.channel_mask),
             auto_connect: true,
             name: "Output",
         });
-        for i in 0..props.muls.len() {
+        for i in 0..self.muls.len() {
             port_props.push(PortProps {
                 id: PortId(1 + i),
                 kind: PortType::SignalIn,
@@ -62,11 +48,21 @@ impl SimpleMixer {
                 name: "Input",
             });
         }
-        Self {
-            chs,
-            props,
-            port_props,
-        }
+        ctx.set_port_props(port_props);
+        Box::new(SimpleMixer::new(self.clone()))
+    }
+}
+
+struct SimpleMixer {
+    chs: Vec<ChannelPosition>,
+    props: SimpleMixerProps,
+}
+
+impl SimpleMixer {
+    #[must_use]
+    fn new(props: SimpleMixerProps) -> Self {
+        let chs = Vec::<ChannelPosition>::from(props.channel_mask);
+        Self { chs, props }
     }
 }
 
@@ -94,10 +90,6 @@ impl NodeTrait for SimpleMixer {
                 }
             }
         }
-    }
-
-    fn port_props(&self) -> &[PortProps] {
-        &self.port_props
     }
 
     fn name(&self) -> &'static str {

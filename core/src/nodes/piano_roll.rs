@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use crate::{
     event::Event,
+    event_modifiers::Adsr,
     node::{NodeBuilderTrait, NodeCtx, NodeInputs, NodeOutputs, NodeTrait},
     port::{PortId, PortProps, PortType},
 };
@@ -14,13 +15,6 @@ pub struct PianoRollProps {
 impl PianoRollProps {
     pub const PORT_ID_OUTPUT: PortId = PortId(0);
 
-    const PORT_PROPS: [PortProps; 1] = [PortProps {
-        id: Self::PORT_ID_OUTPUT,
-        kind: PortType::EventsOut,
-        auto_connect: true,
-        name: "Events",
-    }];
-
     #[must_use]
     pub const fn new(events: Vec<Event>) -> Self {
         Self { events }
@@ -32,6 +26,18 @@ impl NodeBuilderTrait for PianoRollProps {
         let mut props = self.clone();
         let sr = ctx.sample_rate();
         props.events.sort_by_key(|event| event.time.to_samples(sr));
+        let port_props = vec![PortProps {
+            id: Self::PORT_ID_OUTPUT,
+            kind: PortType::EventsOut,
+            auto_connect: true,
+            name: "Events",
+        }];
+        ctx.set_port_props(port_props);
+        ctx.set_event_modifiers(
+            PianoRollProps::PORT_ID_OUTPUT,
+            vec![Box::new(Adsr::new(0.5f32, 0.25f32, 0.25f32, 0.5f32))],
+        )
+        .unwrap();
         Box::new(PianoRoll::new(props))
     }
 }
@@ -42,7 +48,7 @@ struct PianoRoll {
 
 impl PianoRoll {
     #[must_use]
-    const fn new(props: PianoRollProps) -> Self {
+    fn new(props: PianoRollProps) -> Self {
         Self { props }
     }
 }
@@ -58,10 +64,6 @@ impl NodeTrait for PianoRoll {
             .get_events_mut(PianoRollProps::PORT_ID_OUTPUT)
             .unwrap();
         output.update(step_range, self.props.events.as_slice());
-    }
-
-    fn port_props(&self) -> &[PortProps] {
-        &PianoRollProps::PORT_PROPS
     }
 
     fn name(&self) -> &'static str {

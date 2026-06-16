@@ -6,11 +6,11 @@ use std::{collections::HashMap, fmt::Debug, ops::Range};
 use crate::{
     Error, Processor,
     connection::Connection,
-    event::{Events, EventsMut},
+    event::{EventModifierTrait, Events, EventsFrame, EventsMut},
     frame::Frame,
     port::{Port, PortId, PortProps, PortType},
-    signal::{Signals, SignalsMut},
-    time::{SampleBaseType, SampleRateBaseType, TimeUnit},
+    signal::{Signals, SignalsMut, SingalsFrame},
+    time::{SampleBaseType, SampleRateBaseType},
     track::TrackId,
 };
 
@@ -34,14 +34,18 @@ pub struct NodeCtx<'a> {
     processor: &'a mut Processor,
     id: NodeId,
     track_id: TrackId,
+    ports: Vec<Port>,
+    frames: HashMap<PortId, Frame>,
 }
 
 impl<'a> NodeCtx<'a> {
-    pub(crate) const fn new(processor: &'a mut Processor, id: NodeId, track_id: TrackId) -> Self {
+    pub(crate) fn new(processor: &'a mut Processor, id: NodeId, track_id: TrackId) -> Self {
         Self {
             processor,
             id,
             track_id,
+            ports: Vec::with_capacity(0),
+            frames: HashMap::with_capacity(0),
         }
     }
 
@@ -58,6 +62,58 @@ impl<'a> NodeCtx<'a> {
     #[must_use]
     pub const fn buffer_size(&self) -> usize {
         self.processor.buffer_size()
+    }
+
+    pub fn set_port_props(&mut self, port_props: Vec<PortProps>) {
+        let min_events_per_frame = (self.processor.buffer_size() / 2).max(64);
+        self.ports = Vec::with_capacity(port_props.len());
+        for port_props in port_props {
+            self.ports.push(Port::new(
+                self.id,
+                port_props.id,
+                port_props.kind,
+                port_props.auto_connect,
+                port_props.name,
+            ));
+        }
+        self.frames = HashMap::new();
+        for port in &self.ports {
+            match port.kind {
+                PortType::EventsIn | PortType::SignalIn | PortType::Proxy(_) => {}
+                PortType::EventsOut => {
+                    // Lets keep minimum of 64 events per frame
+                    let frame = Frame::Events(EventsFrame::new(min_events_per_frame));
+                    self.frames.insert(port.id, frame);
+                }
+                PortType::SignalOut(channel_mask) => {
+                    let frame = Frame::Signals(SingalsFrame::new(
+                        channel_mask,
+                        self.processor.buffer_size(),
+                    ));
+                    self.frames.insert(port.id, frame);
+                }
+            }
+        }
+    }
+
+    pub fn set_event_modifiers(
+        &mut self,
+        port_id: PortId,
+        modifiers: Vec<Box<dyn EventModifierTrait>>,
+    ) -> Result<(), Error> {
+        let frame = self
+            .frames
+            .get_mut(&port_id)
+            .ok_or_else(|| Error::msg("Port not found".into()))?;
+        match frame {
+            Frame::Events(frame) => {
+                frame.set_modifiers(modifiers);
+            }
+            Frame::Signals(_) => {
+                return Err(Error::msg("Port must be of type output event".into()));
+            }
+        }
+        Ok(())
     }
 
     /// Add node as a child node
@@ -274,13 +330,6 @@ pub trait NodeTrait {
     /// parameters
     /// Always called when node is built
     fn reset(&mut self, ctx: &NodeResetCtx) {}
-    /// This is for keeping the node relevant event after the track end time
-    /// Example delay node need extra
-    /// None mean end is infinite
-    fn duration_extension(&self) -> Option<TimeUnit> {
-        Some(TimeUnit::Samples(0))
-    }
-    fn port_props(&self) -> &[PortProps];
     fn name(&self) -> &str;
 }
 
@@ -316,21 +365,19 @@ impl Node {
         let id: NodeId = processor.new_id().into();
         let mut ctx = NodeCtx::new(processor, id, track_id);
         let mut inner = builder.build(&mut ctx);
+        let (ports, frames) = (ctx.ports, ctx.frames);
         let ctx = NodeResetCtx {
             sample_rate: processor.sample_rate(),
-            step: processor.step - processor.tracks_map.get(&track_id).unwrap().start_step(),
+            step: processor.step()
+                - processor
+                    .tracks_map
+                    .get(&track_id)
+                    .unwrap()
+                    .time_range()
+                    .start()
+                    .to_samples(processor.sample_rate()),
         };
         inner.reset(&ctx);
-        let mut ports = Vec::<Port>::with_capacity(inner.port_props().len());
-        for port_props in inner.port_props() {
-            ports.push(Port::new(
-                id,
-                port_props.id,
-                port_props.kind,
-                port_props.auto_connect,
-                port_props.name,
-            ));
-        }
         let node = Self {
             id,
             track_id,
@@ -339,9 +386,7 @@ impl Node {
             inner,
             frames_invalidated: false,
         };
-        processor
-            .frames_maps
-            .insert(id, processor.build_frames(&node));
+        processor.frames_maps.insert(id, frames);
         processor.nodes_map.insert(id, node);
         Ok(id)
     }
@@ -370,21 +415,19 @@ impl Node {
         let parent_id = old_node.parent_id;
         let mut ctx = NodeCtx::new(processor, id, track_id);
         let mut inner = builder.build(&mut ctx);
+        let (ports, frames) = (ctx.ports, ctx.frames);
         let ctx = NodeResetCtx {
             sample_rate: processor.sample_rate(),
-            step: processor.step - processor.tracks_map.get(&track_id).unwrap().start_step(),
+            step: processor.step()
+                - processor
+                    .tracks_map
+                    .get(&track_id)
+                    .unwrap()
+                    .time_range()
+                    .start()
+                    .to_samples(processor.sample_rate()),
         };
         inner.reset(&ctx);
-        let mut ports = Vec::<Port>::with_capacity(inner.port_props().len());
-        for port_props in inner.port_props() {
-            ports.push(Port::new(
-                id,
-                port_props.id,
-                port_props.kind,
-                port_props.auto_connect,
-                port_props.name,
-            ));
-        }
         let node = Self {
             id,
             track_id,
@@ -413,9 +456,7 @@ impl Node {
         }
         // Remove node before adding new
         processor.remove_nodes(id, invalidate_connections);
-        processor
-            .frames_maps
-            .insert(id, processor.build_frames(&node));
+        processor.frames_maps.insert(id, frames);
         processor.nodes_map.insert(id, node);
         Ok(invalidate_connections)
     }

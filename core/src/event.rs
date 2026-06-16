@@ -1,8 +1,8 @@
-use std::ops::Range;
+use std::{collections::HashMap, ops::Range};
 
 use crate::{
     midi_note::MidiNote,
-    time::{SampleRateBaseType, TimeUnit},
+    time::{SampleBaseType, SampleRateBaseType, TimeUnit},
 };
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -29,7 +29,7 @@ impl From<usize> for EventId {
 #[derive(Debug, Clone, Copy)]
 pub enum EventData {
     NoteOn { note: MidiNote, vel: f32 },
-    NoteOff,
+    NoteOff { note: MidiNote, vel: f32 },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -51,70 +51,153 @@ impl Event {
     }
 }
 
-#[derive(Clone)]
+pub trait EventModifierTrait {
+    // Whether event that is not in bound be kept or not
+    fn should_keep(&self, event: &Event, sr: SampleRateBaseType, step_range: Range<usize>) -> bool;
+    // Takes event and modify, eg: arpeggiator
+    fn pre(&self, event: &mut Vec<Event>);
+    fn post(
+        &self,
+        event: &Event,
+        time: f32,
+        event_time: f32,
+        prev_w_mul: f32,
+        prev_mul: f32,
+    ) -> (f32, f32);
+}
+
+pub trait EventProcessorTrait {
+    fn process(&self, time: f32, w_mul: f32, mul: f32) -> f32;
+}
+
 pub(crate) struct EventsFrame {
-    buffer: Vec<Event>,
-    temp_buffer: Vec<Event>,
-    ids: Vec<EventId>,
+    events: Vec<Event>,
+    temp_events: Vec<Event>,
+    time_maps: HashMap<EventId, f32>,
+    temp_time_maps: HashMap<EventId, f32>,
+    modifiers: Vec<Box<dyn EventModifierTrait>>,
 }
 
 impl EventsFrame {
     pub(crate) fn new(min_events_per_frame: usize) -> Self {
-        let buffer = Vec::<Event>::with_capacity(min_events_per_frame);
-        let temp_buffer = Vec::<Event>::with_capacity(min_events_per_frame);
-        let ids = Vec::<EventId>::with_capacity(min_events_per_frame);
+        let events = Vec::<Event>::with_capacity(min_events_per_frame);
+        let temp_events = Vec::<Event>::with_capacity(min_events_per_frame);
+        let time_maps = HashMap::<EventId, f32>::with_capacity(min_events_per_frame);
+        let temp_time_maps = HashMap::<EventId, f32>::with_capacity(min_events_per_frame);
         Self {
-            buffer,
-            temp_buffer,
-            ids,
+            events,
+            temp_events,
+            time_maps,
+            temp_time_maps,
+            modifiers: Vec::new(),
         }
     }
 
     pub(crate) fn clear(&mut self) {
-        self.buffer.clear();
-        self.ids.clear();
+        self.events.clear();
+        self.time_maps.clear();
+    }
+
+    pub(crate) fn set_modifiers(&mut self, modifiers: Vec<Box<dyn EventModifierTrait>>) {
+        self.modifiers = modifiers;
     }
 
     fn update(&mut self, sr: SampleRateBaseType, step_range: Range<usize>, events: &[Event]) {
         // Optimize previous events by taking the last event
-        self.temp_buffer.clear();
-        self.ids.clear();
-        for prev_event in self.buffer.iter().rev() {
-            if self.ids.contains(&prev_event.id) {
+        self.temp_events.clear();
+        self.temp_time_maps.clear();
+        // NOTE: events must be sorted
+        // Prepend by iterating in reverse order
+        for prev_event in self.events.iter().rev() {
+            if self.temp_time_maps.contains_key(&prev_event.id) {
                 continue;
             }
-            self.ids.push(prev_event.id);
-            if !matches!(prev_event.data, EventData::NoteOff) {
-                self.temp_buffer.push(*prev_event);
+            // All
+            let mut should_keep = false;
+            for modifier in &self.modifiers {
+                should_keep =
+                    should_keep && modifier.should_keep(prev_event, sr, step_range.clone());
             }
+            if !should_keep && matches!(prev_event.data, EventData::NoteOff { note: _, vel: _ }) {
+                // No need to add event but set the time_maps so that the event
+                // wont be checked again
+                self.temp_time_maps.insert(prev_event.id, 0f32);
+                continue;
+            }
+            self.temp_events.push(*prev_event);
+            let time = self
+                .time_maps
+                .get(&prev_event.id)
+                .map(|&time| time)
+                .unwrap_or_else(|| prev_event.time.to_seconds(sr) as f32);
+            self.temp_time_maps.insert(prev_event.id, time);
         }
-        std::mem::swap(&mut self.temp_buffer, &mut self.buffer);
+        // Reverse the events to original order
+        self.temp_events.reverse();
+        std::mem::swap(&mut self.temp_events, &mut self.events);
+        std::mem::swap(&mut self.temp_time_maps, &mut self.time_maps);
+        // Add new events
         for new_event in events {
-            if new_event.time.to_samples(sr) >= step_range.end as i64 {
-                break;
+            let step = new_event.time.to_samples(sr);
+            if step < step_range.start as SampleBaseType || step >= step_range.end as SampleBaseType
+            {
+                continue;
             }
-            if !self.ids.contains(&new_event.id) {
-                self.ids.push(new_event.id);
+            self.events.push(*new_event);
+            if !self.time_maps.contains_key(&new_event.id) {
+                let time = self
+                    .time_maps
+                    .get(&new_event.id)
+                    .map(|&time| time)
+                    .unwrap_or_else(|| new_event.time.to_seconds(sr) as f32);
+                self.time_maps.insert(new_event.id, time);
             }
-            self.buffer.push(*new_event);
         }
+        // Takes event and modify, eg: arpeggiator
+        // for modifier in &self.modifiers {
+        //     modifier.pre(&mut self.events);
+        // }
+        debug_assert!(
+            self.events
+                .is_sorted_by(|a, b| a.time.to_samples(sr) <= b.time.to_samples(sr)),
+            "events not sorted, events: {:?}",
+            self.events,
+        );
     }
 
     pub fn process(
         &self,
         sr: SampleRateBaseType,
         step_range: Range<usize>,
-        cb: &mut impl FnMut(usize, usize, &Event),
+        buffer: &mut [f32],
+        processor: &dyn EventProcessorTrait,
     ) {
-        for (i, step) in step_range.enumerate() {
-            for &id in &self.ids {
-                let last = self.buffer.iter().rev().find(|&event| event.id == id);
-                if let Some(event) = last {
-                    let step = step as i64;
-                    let base_step = event.time.to_samples(sr);
-                    if base_step <= step {
-                        (cb)(i, (step - base_step) as usize, event);
-                    }
+        for (i, event) in self.events.iter().enumerate() {
+            let id = event.id;
+            let base_step = event.time.to_samples(sr);
+            let start = base_step.max(step_range.start as SampleBaseType) as usize;
+            let next_event = self.events[(i + 1)..].iter().find(|event| event.id == id);
+            let end = if let Some(event) = next_event {
+                event.time.to_samples(sr)
+            } else {
+                step_range.end as SampleBaseType
+            };
+            let end = (end as usize).min(step_range.end);
+            debug_assert!(end >= start, "Events must be sorted");
+            if end <= start {
+                continue;
+            }
+            let base_time = base_step as f32 / sr as f32;
+            for step in start..end {
+                let curr = step as f32 / sr as f32;
+                let time = curr - *self.time_maps.get(&id).unwrap();
+                let event_time = curr - base_time;
+                let (mut w_mul, mut mul) = (1f32, 1f32);
+                for modifier in &self.modifiers {
+                    (w_mul, mul) = modifier.post(event, time, event_time, w_mul, mul);
+                }
+                if mul > 0f32 {
+                    buffer[step - step_range.start] = processor.process(time, w_mul, mul);
                 }
             }
         }
@@ -163,15 +246,20 @@ impl<'a> Events<'a> {
         Self { sr, frame }
     }
 
-    /// Process through `time_range` and provide the idx, `TimeUnit` and `Event` through the
-    /// callback fn `cb`.
+    /// Process through `step_range` with a processor onto the `buffer`
     ///
     /// # Arguments
     /// * `step_range` - Step range
     /// * `cb` - Callback fn with params idx, `Step` and `Event`
     ///
-    pub fn process(&self, step_range: Range<usize>, mut cb: impl FnMut(usize, usize, &Event)) {
-        self.frame.process(self.sr, step_range, &mut cb);
+
+    pub fn process(
+        &self,
+        step_range: Range<usize>,
+        buffer: &mut [f32],
+        processor: &dyn EventProcessorTrait,
+    ) {
+        self.frame.process(self.sr, step_range, buffer, processor);
     }
 }
 

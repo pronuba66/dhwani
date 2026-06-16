@@ -6,7 +6,7 @@ use crate::{
     node::{NodeBuilderTrait, NodeId},
     nodes::NodeInfo,
     port::{Port, PortId},
-    time::{TimeFrom, TimeRange},
+    time::{TimeBaseType, TimeFrom, TimeRange},
     track::{Track, TrackId},
 };
 
@@ -71,7 +71,7 @@ impl CtrlSender {
     }
 
     /// Set current time
-    pub async fn set_time(&self, time: TimeFrom) -> Result<f64, Error> {
+    pub async fn set_time(&self, time: TimeFrom) -> Result<TimeBaseType, Error> {
         match self.buffer.send(CtrlReq::Time(time)).await? {
             CtrlRsp::Time(seconds) => Ok(seconds),
             _ => Err(Error::msg("Invalid response".into())),

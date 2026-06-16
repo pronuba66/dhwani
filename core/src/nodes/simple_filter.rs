@@ -99,20 +99,6 @@ impl SimpleFilterProps {
 
 impl NodeBuilderTrait for SimpleFilterProps {
     fn build(&self, ctx: &mut NodeCtx) -> Box<dyn NodeTrait> {
-        Box::new(SimpleFilter::new(ctx, self))
-    }
-}
-
-struct SimpleFilter {
-    chs: Vec<ChannelPosition>,
-    biquad2: Vec<DirectForm2Transposed<f32>>,
-    port_props: Vec<PortProps>,
-}
-
-impl SimpleFilter {
-    #[must_use]
-    pub fn new(ctx: &NodeCtx, props: &SimpleFilterProps) -> Self {
-        let chs = Vec::<ChannelPosition>::from(props.channel_mask);
         let port_props = vec![
             PortProps {
                 id: SimpleFilterProps::PORT_ID_INPUT,
@@ -122,11 +108,25 @@ impl SimpleFilter {
             },
             PortProps {
                 id: SimpleFilterProps::PORT_ID_OUTPUT,
-                kind: PortType::SignalOut(props.channel_mask),
+                kind: PortType::SignalOut(self.channel_mask),
                 auto_connect: true,
                 name: "Output",
             },
         ];
+        ctx.set_port_props(port_props);
+        Box::new(SimpleFilter::new(ctx, self))
+    }
+}
+
+struct SimpleFilter {
+    chs: Vec<ChannelPosition>,
+    biquad2: Vec<DirectForm2Transposed<f32>>,
+}
+
+impl SimpleFilter {
+    #[must_use]
+    pub fn new(ctx: &NodeCtx, props: &SimpleFilterProps) -> Self {
+        let chs = Vec::<ChannelPosition>::from(props.channel_mask);
         let filter_type = match props.filter_type {
             SimpleFilterType::LPF => biquad::Type::LowPass,
             SimpleFilterType::HPF => biquad::Type::HighPass,
@@ -142,11 +142,7 @@ impl SimpleFilter {
         )
         .unwrap();
         let biquad2 = vec![DirectForm2Transposed::<f32>::new(coeffs); chs.len()];
-        Self {
-            chs,
-            biquad2,
-            port_props,
-        }
+        Self { chs, biquad2 }
     }
 }
 
@@ -176,10 +172,6 @@ impl NodeTrait for SimpleFilter {
         for biquad2 in &mut self.biquad2 {
             biquad2.reset_state();
         }
-    }
-
-    fn port_props(&self) -> &[PortProps] {
-        &self.port_props
     }
 
     fn name(&self) -> &'static str {

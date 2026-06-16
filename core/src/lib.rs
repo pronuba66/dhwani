@@ -104,6 +104,9 @@ pub mod track;
 /// Each sub-module exposes a builder that implements [`node::NodeBuilderTrait`].
 pub mod nodes;
 
+/// Built-in event modifier implementations
+pub mod event_modifiers;
+
 // ─── Re-exports ───────────────────────────────────────────────────────────────
 
 /// Dhwani error type

@@ -36,7 +36,8 @@ impl StereoProps {
 }
 
 impl NodeBuilderTrait for StereoProps {
-    fn build(&self, _ctx: &mut NodeCtx) -> Box<dyn NodeTrait> {
+    fn build(&self, ctx: &mut NodeCtx) -> Box<dyn NodeTrait> {
+        ctx.set_port_props(Vec::from(Self::PORT_PROPS));
         Box::new(Stereo::default())
     }
 }
@@ -59,14 +60,10 @@ impl NodeTrait for Stereo {
             && let Some(signal) = input.get(ChannelPosition::FrontLeft)
         {
             for (i, _) in step_range.enumerate() {
-                output.get_mut(ChannelPosition::FrontLeft).unwrap()[i] += signal[i];
-                output.get_mut(ChannelPosition::FrontRight).unwrap()[i] += signal[i];
+                output.get_mut(ChannelPosition::FrontLeft).unwrap()[i] = signal[i];
+                output.get_mut(ChannelPosition::FrontRight).unwrap()[i] = signal[i];
             }
         }
-    }
-
-    fn port_props(&self) -> &[PortProps] {
-        &StereoProps::PORT_PROPS
     }
 
     fn name(&self) -> &'static str {

@@ -28,16 +28,6 @@ impl SimplePianoProps {
 
 impl NodeBuilderTrait for SimplePianoProps {
     fn build(&self, ctx: &mut NodeCtx) -> Box<dyn NodeTrait> {
-        Box::new(SimplePiano::new(ctx, self.clone()))
-    }
-}
-
-struct SimplePiano {
-    port_props: Vec<PortProps>,
-}
-
-impl SimplePiano {
-    fn new(ctx: &mut NodeCtx, props: SimplePianoProps) -> Self {
         // C4 or 440hz is base note with multiplier 1
         const PROPS: [(f32, f32); 4] = [
             (440f32 * std::f32::consts::TAU, 1f32),          // fundamental
@@ -47,11 +37,11 @@ impl SimplePiano {
         ];
         let mut port_props = Vec::<PortProps>::with_capacity(1);
         let piano_roll_node_id = ctx
-            .add_node(&nodes::PianoRollProps::new(props.events))
+            .add_node(&nodes::PianoRollProps::new(self.events.clone()))
             .unwrap();
         let output_node_id = ctx
             .add_node(&nodes::SimpleMixerProps::new(
-                props.channel_mask,
+                self.channel_mask,
                 vec![1f32; PROPS.len()],
             ))
             .unwrap();
@@ -68,14 +58,18 @@ impl SimplePiano {
         });
         for (w, mul) in &PROPS {
             let id = ctx
-                .add_node(&nodes::OscProps::new_sin(props.channel_mask, *w, *mul).unwrap())
+                .add_node(&nodes::OscProps::new_sin(self.channel_mask, *w, *mul).unwrap())
                 .unwrap();
             let _ = ctx.connect_nodes(piano_roll_node_id, id);
             let _ = ctx.connect_nodes(id, output_node_id);
         }
-        Self { port_props }
+        ctx.set_port_props(port_props);
+        Box::new(SimplePiano::default())
     }
 }
+
+#[derive(Default)]
+struct SimplePiano {}
 
 impl NodeTrait for SimplePiano {
     fn process(
@@ -84,10 +78,6 @@ impl NodeTrait for SimplePiano {
         _inputs: &NodeInputs,
         _outputs: &mut NodeOutputs,
     ) {
-    }
-
-    fn port_props(&self) -> &[PortProps] {
-        &self.port_props
     }
 
     fn name(&self) -> &'static str {

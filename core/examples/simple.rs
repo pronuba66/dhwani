@@ -18,7 +18,7 @@ fn main() -> Result<(), anyhow::Error> {
     let mut processor = Processor::new(SAMPLE_RATE, N_CHANNELS, BUFFER_SIZE);
     // Create track 0
     let track_0_id = processor
-        .add_track(TimeRange::new(TimeUnit::Seconds(0f64), None))
+        .add_track(TimeRange::new(TimeUnit::Seconds(0f32), None))
         .unwrap();
     // First sine
     let sine_0_node_id = processor
@@ -34,7 +34,7 @@ fn main() -> Result<(), anyhow::Error> {
         .unwrap();
     // Create track 1
     let track_1_id = processor
-        .add_track(TimeRange::new(TimeUnit::Seconds(0f64), None))
+        .add_track(TimeRange::new(TimeUnit::Seconds(0f32), None))
         .unwrap();
     // Second sine
     let sine_1_node_id = {
@@ -60,7 +60,7 @@ fn main() -> Result<(), anyhow::Error> {
     };
     // Root track
     let root_track_id = processor
-        .add_track(TimeRange::new(TimeUnit::Seconds(0f64), None))
+        .add_track(TimeRange::new(TimeUnit::Seconds(0f32), None))
         .unwrap();
     let mixer_node_id = {
         let builder = nodes::SimpleMixerProps::new(CHANNEL_MASK, vec![1f32; 2]);

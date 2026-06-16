@@ -10,7 +10,6 @@ use crate::{
 /// Private module
 /// Frame is the sotrage required by output ports during a session
 
-#[derive(Clone)]
 pub enum Frame {
     Events(EventsFrame),
     Signals(SingalsFrame),
@@ -27,7 +26,7 @@ impl Frame {
     #[must_use]
     pub const fn get_events(&self, sr: SampleRateBaseType) -> Option<Events<'_>> {
         match self {
-            Self::Events(events) => Some(Events::new(sr, events)),
+            Self::Events(frame) => Some(Events::new(sr, frame)),
             Self::Signals(_) => None,
         }
     }
@@ -35,7 +34,7 @@ impl Frame {
     #[must_use]
     pub fn get_events_mut(&mut self, sr: SampleRateBaseType) -> Option<EventsMut<'_>> {
         match self {
-            Self::Events(events) => Some(EventsMut::new(sr, events)),
+            Self::Events(frame) => Some(EventsMut::new(sr, frame)),
             Self::Signals(_) => None,
         }
     }

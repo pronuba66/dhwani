@@ -62,6 +62,7 @@ impl SampleInfo {
 
 #[derive(Clone)]
 pub struct SamplerProps {
+    channel_mask: ChannelPositionsMask,
     mul: f32,
     info: SampleInfo,
 }
@@ -74,16 +75,38 @@ impl SamplerProps {
     /// # Errors
     /// Will return if audio is not mono or stereo
     pub fn new(info: SampleInfo) -> Result<Self, Error> {
-        if info.n_channels == 0 || info.n_channels > 2 {
-            Err(Error::msg("Sampler only support mono or stereo".into()))
+        let channel_mask = if info.n_channels == 1 {
+            ChannelPositionsMask::FRONT_LEFT
+        } else if info.n_channels == 2 {
+            ChannelPositionsMask::FRONT_LEFT | ChannelPositionsMask::FRONT_RIGHT
         } else {
-            Ok(Self { mul: 1f32, info })
-        }
+            return Err(Error::msg("Sampler only support mono or stereo".into()));
+        };
+        Ok(Self {
+            channel_mask,
+            mul: 1f32,
+            info,
+        })
     }
 }
 
 impl NodeBuilderTrait for SamplerProps {
-    fn build(&self, _ctx: &mut NodeCtx) -> Box<dyn NodeTrait> {
+    fn build(&self, ctx: &mut NodeCtx) -> Box<dyn NodeTrait> {
+        let port_props = vec![
+            PortProps {
+                id: Self::PORT_ID_MUL_CTRL,
+                kind: PortType::SignalIn,
+                auto_connect: true,
+                name: "Multiplier",
+            },
+            PortProps {
+                id: Self::PORT_ID_OUTPUT,
+                kind: PortType::SignalOut(self.channel_mask),
+                auto_connect: true,
+                name: "Output",
+            },
+        ];
+        ctx.set_port_props(port_props);
         Box::new(Sampler::new(self.clone()))
     }
 }
@@ -91,39 +114,13 @@ impl NodeBuilderTrait for SamplerProps {
 struct Sampler {
     chs: Vec<ChannelPosition>,
     props: SamplerProps,
-    port_props: Vec<PortProps>,
 }
 
 impl Sampler {
     #[must_use]
     pub fn new(props: SamplerProps) -> Self {
-        let channel_mask = if props.info.n_channels == 1 {
-            ChannelPositionsMask::FRONT_LEFT
-        } else if props.info.n_channels == 2 {
-            ChannelPositionsMask::FRONT_LEFT | ChannelPositionsMask::FRONT_RIGHT
-        } else {
-            panic!("Sampler only support mono or stereo")
-        };
-        let chs = Vec::<ChannelPosition>::from(channel_mask);
-        let port_props = vec![
-            PortProps {
-                id: SamplerProps::PORT_ID_MUL_CTRL,
-                kind: PortType::SignalIn,
-                auto_connect: true,
-                name: "Multiplier",
-            },
-            PortProps {
-                id: SamplerProps::PORT_ID_OUTPUT,
-                kind: PortType::SignalOut(channel_mask),
-                auto_connect: true,
-                name: "Output",
-            },
-        ];
-        Self {
-            chs,
-            props,
-            port_props,
-        }
+        let chs = Vec::<ChannelPosition>::from(props.channel_mask);
+        Self { chs, props }
     }
 }
 
@@ -151,13 +148,9 @@ impl NodeTrait for Sampler {
             for i in 0..len {
                 let mul = self.props.mul + mul.as_ref().map_or(0f32, |mul| mul[i]);
                 let val = self.props.info.data[((start + i) * n_channels) + j] * mul;
-                output.get_mut(ch).unwrap()[i] += val;
+                output.get_mut(ch).unwrap()[i] = val;
             }
         }
-    }
-
-    fn port_props(&self) -> &[PortProps] {
-        &self.port_props
     }
 
     fn name(&self) -> &'static str {

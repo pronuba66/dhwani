@@ -14,6 +14,7 @@ use dhwani::nodes;
 use dhwani::nodes::NodeInfo;
 use dhwani::port::Port;
 use dhwani::port::PortId;
+use dhwani::time::TimeBaseType;
 use dhwani::time::TimeFrom;
 use dhwani::time::TimeRange;
 use dhwani::time::TimeUnit;
@@ -160,8 +161,8 @@ pub async fn play<'a>(
 pub async fn seek<'a>(
     ctrl_sender: State<'a, CtrlSender>,
     mode: String,
-    time: f64,
-) -> Result<f64, String> {
+    time: TimeBaseType,
+) -> Result<TimeBaseType, String> {
     match mode.as_str() {
         "start" => ctrl_sender
             .set_time(TimeFrom::Start(TimeUnit::Seconds(time)))
@@ -182,8 +183,8 @@ pub async fn seek<'a>(
 #[tauri::command]
 pub async fn add_track<'a>(
     ctrl_sender: State<'a, CtrlSender>,
-    start: f64,
-    end: Option<f64>,
+    start: TimeBaseType,
+    end: Option<TimeBaseType>,
 ) -> Result<usize, String> {
     let start = TimeUnit::Seconds(start);
     let end = end.map(|end| TimeUnit::Seconds(end));
@@ -206,8 +207,8 @@ pub async fn remove_track<'a>(ctrl_sender: State<'a, CtrlSender>, id: usize) -> 
 pub async fn set_track_time_range<'a>(
     ctrl_sender: State<'a, CtrlSender>,
     id: usize,
-    start: f64,
-    end: Option<f64>,
+    start: TimeBaseType,
+    end: Option<TimeBaseType>,
 ) -> Result<(), String> {
     let start = TimeUnit::Seconds(start);
     let end = end.map(|end| TimeUnit::Seconds(end));
@@ -223,8 +224,8 @@ pub struct EventProps {
     id: usize,
     note: u8,
     vel: f32,
-    start: f64,
-    end: f64,
+    start: TimeBaseType,
+    end: TimeBaseType,
 }
 
 #[derive(Debug, Deserialize)]
@@ -254,7 +255,7 @@ pub enum NodeProps {
     #[serde(rename_all = "camelCase")]
     Delay {
         n_channels: Option<u16>,
-        delay: f64,
+        delay: TimeBaseType,
         mul: f32,
     },
     #[serde(rename_all = "camelCase")]
@@ -379,7 +380,10 @@ fn new_builder<'a>(
                     note,
                     vel: event_prop.vel,
                 };
-                let data_off = EventData::NoteOff;
+                let data_off = EventData::NoteOff {
+                    note,
+                    vel: event_prop.vel,
+                };
                 events.push(Event::new(
                     event_prop.id.into(),
                     TimeUnit::Seconds(event_prop.start),

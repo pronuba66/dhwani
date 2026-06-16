@@ -43,22 +43,6 @@ impl DelayProps {
 
 impl NodeBuilderTrait for DelayProps {
     fn build(&self, ctx: &mut NodeCtx) -> Box<dyn NodeTrait> {
-        Box::new(Delay::new(ctx, self.clone()))
-    }
-}
-
-struct Delay {
-    chs: Vec<ChannelPosition>,
-    buffer_size: usize,
-    buffers: Vec<Vec<f32>>,
-    props: DelayProps,
-    port_props: Vec<PortProps>,
-}
-
-impl Delay {
-    #[must_use]
-    fn new(ctx: &NodeCtx, props: DelayProps) -> Self {
-        let chs = Vec::<ChannelPosition>::from(props.channel_mask);
         let port_props = vec![
             PortProps {
                 id: DelayProps::PORT_ID_INPUT,
@@ -68,16 +52,32 @@ impl Delay {
             },
             PortProps {
                 id: DelayProps::PORT_ID_OUTPUT,
-                kind: PortType::SignalOut(props.channel_mask),
+                kind: PortType::SignalOut(self.channel_mask),
                 auto_connect: true,
                 name: "Output",
             },
         ];
+        ctx.set_port_props(port_props);
+        Box::new(Delay::new(ctx, self.clone()))
+    }
+}
+
+struct Delay {
+    chs: Vec<ChannelPosition>,
+    buffer_size: usize,
+    buffers: Vec<Vec<f32>>,
+    props: DelayProps,
+}
+
+impl Delay {
+    #[must_use]
+    fn new(ctx: &NodeCtx, props: DelayProps) -> Self {
+        let chs = Vec::<ChannelPosition>::from(props.channel_mask);
         // Limit additional size to 64 seconds
         let additional_size = props
             .delay
             .to_samples(ctx.sample_rate())
-            .min(TimeUnit::Seconds(64f64).to_samples(ctx.sample_rate()))
+            .min(TimeUnit::Seconds(64f32).to_samples(ctx.sample_rate()))
             as usize;
         let buffer_size = ctx.buffer_size() + additional_size;
         let mut buffers = Vec::<Vec<f32>>::with_capacity(chs.len());
@@ -89,7 +89,6 @@ impl Delay {
             buffer_size,
             buffers,
             props,
-            port_props,
         }
     }
 }
@@ -129,14 +128,6 @@ impl NodeTrait for Delay {
                 self.buffers[i][old..].fill(0f32);
             }
         }
-    }
-
-    fn duration_extension(&self) -> Option<TimeUnit> {
-        Some(self.props.delay)
-    }
-
-    fn port_props(&self) -> &[PortProps] {
-        &self.port_props
     }
 
     fn name(&self) -> &'static str {

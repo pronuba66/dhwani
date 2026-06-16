@@ -106,7 +106,7 @@ impl Plotter {
             // Piano -> Output(L)
             // Piano -> Output(R)
             let track_id = match ctrl_sender
-                .add_track(TimeRange::new(TimeUnit::Seconds(0f64), None))
+                .add_track(TimeRange::new(TimeUnit::Seconds(0f32), None))
                 .await
             {
                 Ok(id) => id,
@@ -124,31 +124,52 @@ impl Plotter {
                         events![
                             (
                                 0,
-                                TimeUnit::Samples(0),
+                                TimeUnit::Seconds(0f32),
                                 event::EventData::NoteOn {
                                     note: MidiNote::from_midi_str("C4").unwrap(), // C4
                                     vel: 1f32,
                                 }
                             ),
-                            (0, TimeUnit::Seconds(1f64), event::EventData::NoteOff),
                             (
-                                0, // Since previous note ends, reusing the same event id
-                                TimeUnit::Seconds(2f64),
+                                0,
+                                TimeUnit::Seconds(1f32),
+                                event::EventData::NoteOff {
+                                    note: MidiNote::from_midi_str("C4").unwrap(), // C4
+                                    vel: 1f32,
+                                }
+                            ),
+                            (
+                                1, // Do Not reuse ID, they will cause the phase to continue
+                                TimeUnit::Seconds(2f32),
                                 event::EventData::NoteOn {
                                     note: MidiNote::from_midi_str("D4").unwrap(), // D4
                                     vel: 1f32,
                                 }
                             ),
-                            (0, TimeUnit::Seconds(4f64), event::EventData::NoteOff),
                             (
-                                0,
-                                TimeUnit::Seconds(5f64),
+                                1,
+                                TimeUnit::Seconds(4f32),
+                                event::EventData::NoteOff {
+                                    note: MidiNote::from_midi_str("D4").unwrap(), // D4
+                                    vel: 1f32,
+                                }
+                            ),
+                            (
+                                2, // Do Not reuse ID, they will cause the phase to continue
+                                TimeUnit::Seconds(5f32),
                                 event::EventData::NoteOn {
                                     note: MidiNote::from_midi_str("E4").unwrap(), // E4
                                     vel: 1f32,
                                 }
                             ),
-                            (0, TimeUnit::Seconds(20f64), event::EventData::NoteOff),
+                            (
+                                2,
+                                TimeUnit::Seconds(20f32),
+                                event::EventData::NoteOff {
+                                    note: MidiNote::from_midi_str("E4").unwrap(), // E4
+                                    vel: 1f32,
+                                }
+                            ),
                         ],
                     )),
                 )
@@ -253,7 +274,7 @@ impl App for Plotter {
                         }
                         egui::Key::Comma => {
                             if !modifiers.command {
-                                let time = TimeUnit::Seconds(-4f64);
+                                let time = TimeUnit::Seconds(-4f32);
                                 println!("Set Time to {time:?} from current");
                                 let ctrl_sender = self.ctrl_sender.clone();
                                 tokio::spawn(async move {
@@ -271,7 +292,7 @@ impl App for Plotter {
                         }
                         egui::Key::Period => {
                             if !modifiers.command {
-                                let time = TimeUnit::Seconds(4f64);
+                                let time = TimeUnit::Seconds(4f32);
                                 println!("Set Time to {time:?} from current");
                                 let ctrl_sender = self.ctrl_sender.clone();
                                 tokio::spawn(async move {
@@ -388,7 +409,6 @@ pub fn make_stream(
                 }
             }
             plot_data.push(output);
-            // output.fill(0f32);
         },
         |err| eprintln!("Error building output sound stream: {err}"),
         None,

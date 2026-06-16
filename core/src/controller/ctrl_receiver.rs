@@ -9,6 +9,7 @@ use crate::{
     node::NodeId,
     nodes::NodeInfo,
     port::Port,
+    time::TimeBaseType,
     track::{Track, TrackId},
 };
 
@@ -16,7 +17,7 @@ use crate::{
 pub(crate) enum CtrlRsp {
     Quit,
     Play(bool),
-    Time(f64),
+    Time(TimeBaseType),
     Clear,
     GetTrackCount(usize),
     GetTracks(Vec<Track>),

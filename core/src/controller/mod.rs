@@ -127,7 +127,7 @@ mod tests {
 
     use crate::{
         controller::{ctrl_buffer::CtrlBuffer, ctrl_receiver::CtrlRsp, ctrl_sender::CtrlReq},
-        time::{TimeFrom, TimeUnit},
+        time::{TimeBaseType, TimeFrom, TimeUnit},
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -148,7 +148,7 @@ mod tests {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
                 for j in 0..n_iter_per_thread {
-                    let time = (i + (j * n_iter_per_thread)) as f64;
+                    let time = (i + (j * n_iter_per_thread)) as TimeBaseType;
                     ctrl_sender
                         .set_time(TimeFrom::Start(TimeUnit::Seconds(time)))
                         .await
@@ -164,7 +164,7 @@ mod tests {
                 match ctrl {
                     CtrlReq::Time(time) => match time {
                         TimeFrom::Start(_) => {
-                            req.send(Ok(CtrlRsp::Time(0f64)));
+                            req.send(Ok(CtrlRsp::Time(0f32)));
                         }
                         _ => {
                             panic!("Invalid time!");
