@@ -61,6 +61,7 @@ impl<'a> SignalsMut<'a> {
             .map(|(_, buffer)| &buffer[self.range.clone()])
     }
 
+    #[must_use]
     pub fn get_mut(&mut self, ch: ChannelPosition) -> Option<&mut [f32]> {
         self.frame
             .signals

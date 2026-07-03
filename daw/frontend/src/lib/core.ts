@@ -12,6 +12,7 @@ import { SimpleFilterNode } from "./nodes/simple-filter"
 import { StereoNode } from "./nodes/stereo"
 import { PianoRollNode } from "./nodes/piano-roll"
 import { DelayNode } from "./nodes/delay"
+import { AdsrNode } from "./nodes/adsr"
 
 export interface AudioFileInfo {
   readonly id: number
@@ -138,6 +139,7 @@ export const nodeClasses: NodeClassWithDefault<any, any>[] = [
   SimpleFilterNode,
   StereoNode,
   DelayNode,
+  AdsrNode,
   // PianoRoll, // Does not have default
   // SamplerNode, // Does not have default
 ]
@@ -264,9 +266,21 @@ export class Dhwani {
       PianoRollNode.new()
     )
     track.setBaseNode(pianoRollNode.id)
-    const oscNode = await this.addNode(track.id, OscNode, OscNode.default())
+    const adsrNode = await this.addNode(track.id, AdsrNode, AdsrNode.default())
     {
       const sourcePort = pianoRollNode.ports.get(PianoRollNode.portIdOutput)
+      if (!sourcePort) {
+        throw "Invalid source port"
+      }
+      const targetPort = adsrNode.ports.get(AdsrNode.portIdInput)
+      if (!targetPort) {
+        throw "Invalid target port"
+      }
+      await this.connectPorts(sourcePort, targetPort)
+    }
+    const oscNode = await this.addNode(track.id, OscNode, OscNode.default())
+    {
+      const sourcePort = adsrNode.ports.get(AdsrNode.portIdOutput)
       if (!sourcePort) {
         throw "Invalid source port"
       }

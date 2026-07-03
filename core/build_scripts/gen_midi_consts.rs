@@ -34,5 +34,24 @@ pub fn generate() -> String {
         writeln!(s, "    {}f32,", mul as f32).ok();
     }
     s.push_str("];\n");
+    s.push('\n');
+    writeln!(s, "pub const MIDI_NOTE_W: [f32; {TOTAL_NOTES}] = [").ok();
+    for i in 0..TOTAL_NOTES {
+        #[allow(clippy::cast_precision_loss)]
+        let f = 440f64 * ((i.cast_signed() - 69) as f64 / 12f64).exp2();
+        let w = f * std::f64::consts::TAU;
+        writeln!(
+            s,
+            "    // {}, {}{}, {}hz",
+            i,
+            NOTES[i % 12],
+            (i / 12).cast_signed() - 1,
+            f,
+        )
+        .ok();
+        #[allow(clippy::cast_possible_truncation)]
+        writeln!(s, "    {}f32,", w as f32).ok();
+    }
+    s.push_str("];\n");
     s
 }

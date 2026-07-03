@@ -14,6 +14,7 @@ export type OscNodeProps = {
   nChannels?: number
   mode: OscMode
   freq: number
+  mul: number
 } & NodeProps
 
 export class OscNode implements Node {
@@ -50,6 +51,7 @@ export class OscNode implements Node {
       nChannels: 2,
       mode: "Sine",
       freq: 220,
+      mul: 1,
     } satisfies OscNodeProps
   }
 

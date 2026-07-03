@@ -5,9 +5,9 @@ use cpal::Stream;
 use cpal::traits::StreamTrait;
 use dhwani::channel::ChannelPositionsMask;
 use dhwani::controller::CtrlSender;
-use dhwani::event::Event;
-use dhwani::event::EventData;
-use dhwani::midi_note::MidiNote;
+use dhwani::midi::MidiEvent;
+use dhwani::midi::MidiMsg;
+use dhwani::midi::MidiNote;
 use dhwani::node::NodeBuilderTrait;
 use dhwani::node::NodeId;
 use dhwani::nodes;
@@ -46,7 +46,7 @@ impl From<Port> for Port2 {
         Port2 {
             id: value.id().0,
             node_id: value.node_id().0,
-            is_event: value.kind().is_event(),
+            is_event: value.kind().is_voice(),
             is_input: value.kind().is_input(),
             auto_connect: value.auto_connect(),
             name: value.name().to_string(),
@@ -266,6 +266,13 @@ pub enum NodeProps {
     PianoRoll {
         events: Vec<EventProps>,
     },
+    #[serde(rename_all = "camelCase")]
+    Adsr {
+        a: f32,
+        d: f32,
+        s: f32,
+        r: f32,
+    },
 }
 
 fn get_channel_mask(n_channels: Option<u16>) -> Result<ChannelPositionsMask, String> {
@@ -373,23 +380,23 @@ fn new_builder<'a>(
         NodeProps::PianoRoll {
             events: mut event_props,
         } => {
-            let mut events = Vec::<Event>::with_capacity(event_props.len() * 2);
+            let mut events = Vec::<MidiMsg>::with_capacity(event_props.len() * 2);
             for event_prop in event_props.drain(..) {
                 let note = MidiNote::from_midi_num(event_prop.note).map_err(err_to_string)?;
-                let data_on = EventData::NoteOn {
+                let data_on = MidiEvent::NoteOn {
                     note,
                     vel: event_prop.vel,
                 };
-                let data_off = EventData::NoteOff {
+                let data_off = MidiEvent::NoteOff {
                     note,
                     vel: event_prop.vel,
                 };
-                events.push(Event::new(
+                events.push(MidiMsg::new(
                     event_prop.id.into(),
                     TimeUnit::Seconds(event_prop.start),
                     data_on,
                 ));
-                events.push(Event::new(
+                events.push(MidiMsg::new(
                     event_prop.id.into(),
                     TimeUnit::Seconds(event_prop.end),
                     data_off,
@@ -398,6 +405,7 @@ fn new_builder<'a>(
             events.sort_by(|a, b| a.time.to_samples(44100).cmp(&b.time.to_samples(44100)));
             Ok(Box::new(nodes::PianoRollProps::new(events)))
         }
+        NodeProps::Adsr { a, d, s, r } => Ok(Box::new(nodes::AdsrProps::new(a, d, s, r))),
     }
 }
 

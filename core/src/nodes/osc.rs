@@ -3,9 +3,9 @@ use std::ops::Range;
 use crate::{
     Error,
     channel::{ChannelPosition, ChannelPositionsMask},
-    event::{EventProcessorTrait},
     node::{NodeBuilderTrait, NodeCtx, NodeInputs, NodeOutputs, NodeResetCtx, NodeTrait},
     port::{PortId, PortProps, PortType},
+    voice::VoiceProcessorTrait,
 };
 
 #[derive(Default, Clone, Copy)]
@@ -119,7 +119,7 @@ impl NodeBuilderTrait for OscProps {
             vec![
                 PortProps {
                     id: Self::PORT_ID_IN_EVENTS,
-                    kind: PortType::EventsIn,
+                    kind: PortType::VoicesIn,
                     auto_connect: true,
                     name: "Events",
                 },
@@ -152,7 +152,7 @@ impl NodeBuilderTrait for OscProps {
             vec![
                 PortProps {
                     id: Self::PORT_ID_IN_EVENTS,
-                    kind: PortType::EventsIn,
+                    kind: PortType::VoicesIn,
                     auto_connect: true,
                     name: "Events",
                 },
@@ -197,48 +197,60 @@ impl NodeBuilderTrait for OscProps {
     }
 }
 
-struct OscEventProcessor {
-    mode: OscMode,
-    ds: f32,
-    w: f32,
+struct SinEventProcessor {
+    _w: f32,
     phase: f32,
     mul: f32,
 }
 
-impl OscEventProcessor {}
+impl VoiceProcessorTrait for SinEventProcessor {
+    fn process(&self, phase: f32, _w: f32, mul: f32) -> f32 {
+        (self.phase + phase).sin() * self.mul * mul
+    }
+}
 
-impl EventProcessorTrait for OscEventProcessor {
-    fn process(&self, time: f32, w_mul: f32, mul: f32) -> f32 {
-        match self.mode {
-            OscMode::Sin => (self.phase + (w_mul * self.w * time as f32)).sin() * self.mul * mul,
-            OscMode::Square => {
-                const THRESHOLD: f32 = 1e-6;
-                let ds = self.ds.clamp(THRESHOLD, 1f32 - THRESHOLD);
-                let ramp = (self.phase + (w_mul * self.w * time as f32))
-                    .rem_euclid(std::f32::consts::TAU)
-                    / std::f32::consts::TAU;
-                if ramp > ds { 0f32 } else { self.mul * mul }
-            }
-            OscMode::Saw => {
-                const THRESHOLD: f32 = 1e-6;
-                let ds = self.ds.clamp(THRESHOLD, 1f32 - THRESHOLD);
-                let ramp = (self.phase + (w_mul * self.w * time as f32))
-                    .rem_euclid(std::f32::consts::TAU)
-                    / std::f32::consts::TAU;
-                let val = if ramp < ds {
-                    ramp / ds
-                } else {
-                    1f32 - ((ramp - ds) / (1f32 - ds))
-                };
-                val * self.mul * mul
-            }
-        }
+struct SquareEventProcessor {
+    ds: f32,
+    _w: f32,
+    phase: f32,
+    mul: f32,
+}
+
+impl VoiceProcessorTrait for SquareEventProcessor {
+    fn process(&self, phase: f32, _w: f32, mul: f32) -> f32 {
+        const THRESHOLD: f32 = 1e-6;
+        let ds = self.ds.clamp(THRESHOLD, 1f32 - THRESHOLD);
+        let ramp = (self.phase + phase).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
+        if ramp > ds { 0f32 } else { self.mul * mul }
+    }
+}
+
+struct SawEventProcessor {
+    ds: f32,
+    _w: f32,
+    phase: f32,
+    mul: f32,
+}
+
+impl VoiceProcessorTrait for SawEventProcessor {
+    fn process(&self, phase: f32, _w: f32, mul: f32) -> f32 {
+        const THRESHOLD: f32 = 1e-6;
+        let ds = self.ds.clamp(THRESHOLD, 1f32 - THRESHOLD);
+        let ramp = (self.phase + phase).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
+        let val = if ramp < ds {
+            ramp / ds
+        } else {
+            1f32 - ((ramp - ds) / (1f32 - ds))
+        };
+        val * self.mul * mul
     }
 }
 
 struct Osc {
+    sr: f32,
     chs: Vec<ChannelPosition>,
     props: OscProps,
+    event_processor: Box<dyn VoiceProcessorTrait>,
     phase_delta: f32,
     phase: f32,
 }
@@ -249,9 +261,30 @@ impl Osc {
         let chs = Vec::<ChannelPosition>::from(props.channel_mask);
         let phase_delta = props.w / ctx.sample_rate() as f32;
         let phase = props.phase;
+        let event_processor: Box<dyn VoiceProcessorTrait> = match props.mode {
+            OscMode::Sin => Box::new(SinEventProcessor {
+                _w: props.w,
+                phase: props.phase,
+                mul: props.mul,
+            }),
+            OscMode::Square => Box::new(SquareEventProcessor {
+                ds: props.ds,
+                _w: props.w,
+                phase: props.phase,
+                mul: props.mul,
+            }),
+            OscMode::Saw => Box::new(SawEventProcessor {
+                ds: props.ds,
+                _w: props.w,
+                phase: props.phase,
+                mul: props.mul,
+            }),
+        };
         Self {
+            sr: ctx.sample_rate() as f32,
             chs,
             props,
+            event_processor,
             phase_delta,
             phase,
         }
@@ -295,19 +328,12 @@ impl NodeTrait for Osc {
             return;
         }
         let mut output = outputs.get_signals_mut(OscProps::PORT_ID_OUTPUT).unwrap();
-        let events = inputs.get_events(OscProps::PORT_ID_IN_EVENTS);
-        if let Some(events) = events {
-            let processor = OscEventProcessor {
-                mode: self.props.mode,
-                ds: self.props.ds,
-                w: self.props.w,
-                phase: self.props.phase,
-                mul: self.props.mul,
-            };
-            events.process(
-                step_range.clone(),
+        let voices = inputs.get_voices(OscProps::PORT_ID_IN_EVENTS);
+        if let Some(voices) = voices {
+            voices.process(
+                step_range,
                 output.get_mut(self.chs[0]).unwrap(),
-                &processor,
+                self.event_processor.as_ref(),
             );
             for &ch in &self.chs[1..] {
                 let _ = output.copy(ch, self.chs[0]);
@@ -328,7 +354,7 @@ impl NodeTrait for Osc {
                         OscMode::Square => self.val_square(ds, self.phase + phase, mul),
                         OscMode::Saw => self.val_saw(ds, self.phase + phase, mul),
                     };
-                    self.phase += self.phase_delta + w;
+                    self.phase += self.phase_delta + (w / self.sr);
                     // wrap
                     self.phase = self.phase.rem_euclid(std::f32::consts::TAU);
                     val

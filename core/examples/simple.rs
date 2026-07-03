@@ -1,7 +1,7 @@
 use dhwani::{
     Processor,
     channel::ChannelPositionsMask,
-    midi_note::MidiNote,
+    midi::MidiNote,
     nodes::{self},
     time::{TimeRange, TimeUnit},
 };

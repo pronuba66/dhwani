@@ -17,9 +17,9 @@
 //! track.
 //!
 //! Every node exposes one or more [`port::Port`]s, which may be either inputs
-//! or outputs and carry [`signal::Signals`] or [`event::Events`]. Ports can be
-//! connected to compatible ports on other nodes. Each node also owns internal
-//! buffers corresponding to its output ports.
+//! or outputs and carry signal or voices. Ports can be connected to compatible
+//! ports on other nodes. Each node also owns internal buffers corresponding to
+//! its output ports.
 //!
 //! Nodes are processed in topological order. This guarantees that when a node
 //! with input connections is executed, the output buffers of all upstream
@@ -40,11 +40,11 @@
 //! Nodes communicate through [`port::Port`]s. Three kinds of ports are
 //! available:
 //!
-//! - **[`signal::Signals`]** — continuous audio-rate or control-rate
+//! - **[`frame::Frame::Signals`]** — continuous audio-rate or control-rate
 //!   floating-point streams (e.g. audio buffers or LFO outputs) for each
 //!   channel.
-//! - **[`event::Events`]** — discrete, timestamped events within a processing
-//!   frame (e.g. MIDI note on/off messages).
+//! - **[`frame::Frame::Voices`]** — discrete, timestamped voices produces from a
+//!   [`midi::MidiMsg`]
 //! - **[`port::PortProxy`]** — proxy ports that forward another port,
 //!   primarily used by parent nodes to expose child node interfaces.
 //!
@@ -92,20 +92,17 @@ mod midi_consts {
 
 pub mod buffer;
 pub mod channel;
-pub mod event;
-pub mod midi_note;
+pub mod midi;
 pub mod node;
 pub mod port;
 pub mod signal;
 pub mod time;
 pub mod track;
+pub mod voice;
 
 /// Built-in node implementations (oscillators, filters, mixers, etc.).
 /// Each sub-module exposes a builder that implements [`node::NodeBuilderTrait`].
 pub mod nodes;
-
-/// Built-in event modifier implementations
-pub mod event_modifiers;
 
 // ─── Re-exports ───────────────────────────────────────────────────────────────
 

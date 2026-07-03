@@ -54,7 +54,7 @@ impl PortProxy {
             id,
             node_id: port.node_id,
             port_id: port.id,
-            is_event: port.kind.is_event(),
+            is_event: port.kind.is_voice(),
             is_input: port.kind.is_input(),
         }
     }
@@ -70,9 +70,9 @@ impl Eq for PortProxy {}
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum PortType {
-    EventsIn,
+    VoicesIn,
     SignalIn,
-    EventsOut,
+    VoicesOut,
     SignalOut(ChannelPositionsMask),
     /// Port proxy is identified by [`PortProxyId`] so that when replacing node, the
     /// connection can persist if the [`PortProxyId`] is same.
@@ -83,8 +83,8 @@ impl PortType {
     #[must_use]
     pub const fn is_input(&self) -> bool {
         match self {
-            Self::EventsIn | Self::SignalIn => true,
-            Self::EventsOut | Self::SignalOut(_) => false,
+            Self::VoicesIn | Self::SignalIn => true,
+            Self::VoicesOut | Self::SignalOut(_) => false,
             Self::Proxy(port_proxy) => port_proxy.is_input,
         }
     }
@@ -94,9 +94,9 @@ impl PortType {
         !self.is_input()
     }
     #[must_use]
-    pub const fn is_event(&self) -> bool {
+    pub const fn is_voice(&self) -> bool {
         match self {
-            Self::EventsIn | Self::EventsOut => true,
+            Self::VoicesIn | Self::VoicesOut => true,
             Self::SignalIn | Self::SignalOut(_) => false,
             Self::Proxy(port_proxy) => port_proxy.is_event,
         }
@@ -104,7 +104,7 @@ impl PortType {
 
     #[must_use]
     pub const fn is_signal(&self) -> bool {
-        !self.is_event()
+        !self.is_voice()
     }
 }
 
@@ -173,9 +173,9 @@ impl Debug for Port {
         write!(f, "{} {:?}::{:?}", self.name, self.node_id, self.id)?;
         write!(f, "[")?;
         match self.kind {
-            PortType::EventsIn => write!(f, "E[I]"),
+            PortType::VoicesIn => write!(f, "E[I]"),
             PortType::SignalIn => write!(f, "S[I]"),
-            PortType::EventsOut => write!(f, "E[O]"),
+            PortType::VoicesOut => write!(f, "E[O]"),
             PortType::SignalOut(_n_channels) => write!(f, "S[O]"),
             PortType::Proxy(_) => write!(f, "P[O]"),
         }?;

@@ -11,8 +11,8 @@ use crossbeam_channel::{Receiver, Sender, bounded};
 use dhwani::{
     channel::ChannelPositionsMask,
     controller::{CtrlRingBufReceiver, CtrlSender, start_controller},
-    event, events,
-    midi_note::MidiNote,
+    midi::{MidiEvent, MidiNote},
+    midi_msgs,
     nodes::{self, SampleInfo},
     time::{SampleRateBaseType, TimeFrom, TimeRange, TimeUnit},
 };
@@ -116,62 +116,60 @@ impl Plotter {
                 }
             };
             // Simple piano
+            let msgs = midi_msgs![
+                (
+                    0,
+                    TimeUnit::Seconds(0f32),
+                    MidiEvent::NoteOn {
+                        note: MidiNote::from_midi_str("C4").unwrap(), // C4
+                        vel: 1f32,
+                    }
+                ),
+                (
+                    0,
+                    TimeUnit::Seconds(1f32),
+                    MidiEvent::NoteOff {
+                        note: MidiNote::from_midi_str("C4").unwrap(), // C4
+                        vel: 1f32,
+                    }
+                ),
+                (
+                    1, // Do Not reuse ID, they will cause the phase to continue
+                    TimeUnit::Seconds(1f32),
+                    MidiEvent::NoteOn {
+                        note: MidiNote::from_midi_str("D4").unwrap(), // D4
+                        vel: 1f32,
+                    }
+                ),
+                (
+                    1,
+                    TimeUnit::Seconds(4f32),
+                    MidiEvent::NoteOff {
+                        note: MidiNote::from_midi_str("D4").unwrap(), // D4
+                        vel: 1f32,
+                    }
+                ),
+                (
+                    2, // Do Not reuse ID, they will cause the phase to continue
+                    TimeUnit::Seconds(5f32),
+                    MidiEvent::NoteOn {
+                        note: MidiNote::from_midi_str("E4").unwrap(), // E4
+                        vel: 1f32,
+                    }
+                ),
+                (
+                    2,
+                    TimeUnit::Seconds(20f32),
+                    MidiEvent::NoteOff {
+                        note: MidiNote::from_midi_str("E4").unwrap(), // E4
+                        vel: 1f32,
+                    }
+                ),
+            ];
             let simple_piano_node_id = match ctrl_sender
                 .add_node(
                     track_id,
-                    Box::new(nodes::SimplePianoProps::new(
-                        CHANNEL_MASK,
-                        events![
-                            (
-                                0,
-                                TimeUnit::Seconds(0f32),
-                                event::EventData::NoteOn {
-                                    note: MidiNote::from_midi_str("C4").unwrap(), // C4
-                                    vel: 1f32,
-                                }
-                            ),
-                            (
-                                0,
-                                TimeUnit::Seconds(1f32),
-                                event::EventData::NoteOff {
-                                    note: MidiNote::from_midi_str("C4").unwrap(), // C4
-                                    vel: 1f32,
-                                }
-                            ),
-                            (
-                                1, // Do Not reuse ID, they will cause the phase to continue
-                                TimeUnit::Seconds(2f32),
-                                event::EventData::NoteOn {
-                                    note: MidiNote::from_midi_str("D4").unwrap(), // D4
-                                    vel: 1f32,
-                                }
-                            ),
-                            (
-                                1,
-                                TimeUnit::Seconds(4f32),
-                                event::EventData::NoteOff {
-                                    note: MidiNote::from_midi_str("D4").unwrap(), // D4
-                                    vel: 1f32,
-                                }
-                            ),
-                            (
-                                2, // Do Not reuse ID, they will cause the phase to continue
-                                TimeUnit::Seconds(5f32),
-                                event::EventData::NoteOn {
-                                    note: MidiNote::from_midi_str("E4").unwrap(), // E4
-                                    vel: 1f32,
-                                }
-                            ),
-                            (
-                                2,
-                                TimeUnit::Seconds(20f32),
-                                event::EventData::NoteOff {
-                                    note: MidiNote::from_midi_str("E4").unwrap(), // E4
-                                    vel: 1f32,
-                                }
-                            ),
-                        ],
-                    )),
+                    Box::new(nodes::SimplePianoProps::new(CHANNEL_MASK, msgs)),
                 )
                 .await
             {

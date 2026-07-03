@@ -16,7 +16,7 @@ impl Connection {
         if !target.kind.is_input() {
             return Err(Error::msg("Target port must be input".into()));
         }
-        if source.kind.is_event() != target.kind.is_event() {
+        if source.kind.is_voice() != target.kind.is_voice() {
             return Err(Error::msg("Mismatch port type".into()));
         }
         Ok(Self { source, target })

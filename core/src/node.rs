@@ -1,17 +1,21 @@
 //! [`NodeTrait`] and [`NodeBuilderTrait`] definitions, plus the type-erased
 //! [`Node`] wrapper. Implement these traits to create custom processing nodes.
 
-use std::{collections::HashMap, fmt::Debug, ops::Range};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    ops::{Deref, DerefMut, Range},
+};
 
 use crate::{
     Error, Processor,
     connection::Connection,
-    event::{EventModifierTrait, Events, EventsFrame, EventsMut},
     frame::Frame,
     port::{Port, PortId, PortProps, PortType},
     signal::{Signals, SignalsMut, SingalsFrame},
     time::{SampleBaseType, SampleRateBaseType},
     track::TrackId,
+    voice::{VoiceEnvelopeProcessorTrait, Voices, VoicesFrame, VoicesMut},
 };
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -64,8 +68,12 @@ impl<'a> NodeCtx<'a> {
         self.processor.buffer_size()
     }
 
+    #[must_use]
+    pub fn min_voices_per_frame(&self) -> usize {
+        self.processor.min_voices_per_frame()
+    }
+
     pub fn set_port_props(&mut self, port_props: Vec<PortProps>) {
-        let min_events_per_frame = (self.processor.buffer_size() / 2).max(64);
         self.ports = Vec::with_capacity(port_props.len());
         for port_props in port_props {
             self.ports.push(Port::new(
@@ -79,10 +87,12 @@ impl<'a> NodeCtx<'a> {
         self.frames = HashMap::new();
         for port in &self.ports {
             match port.kind {
-                PortType::EventsIn | PortType::SignalIn | PortType::Proxy(_) => {}
-                PortType::EventsOut => {
-                    // Lets keep minimum of 64 events per frame
-                    let frame = Frame::Events(EventsFrame::new(min_events_per_frame));
+                PortType::VoicesIn | PortType::SignalIn | PortType::Proxy(_) => {}
+                PortType::VoicesOut => {
+                    let frame = Frame::Voices(VoicesFrame::new(
+                        self.processor.sample_rate(),
+                        self.processor.min_voices_per_frame(),
+                    ));
                     self.frames.insert(port.id, frame);
                 }
                 PortType::SignalOut(channel_mask) => {
@@ -96,24 +106,22 @@ impl<'a> NodeCtx<'a> {
         }
     }
 
-    pub fn set_event_modifiers(
+    pub fn set_envelope_processors(
         &mut self,
         port_id: PortId,
-        modifiers: Vec<Box<dyn EventModifierTrait>>,
+        procs: Vec<Box<dyn VoiceEnvelopeProcessorTrait>>,
     ) -> Result<(), Error> {
         let frame = self
             .frames
             .get_mut(&port_id)
-            .ok_or_else(|| Error::msg("Port not found".into()))?;
+            .ok_or_else(|| Error::msg("Invalid port".into()))?;
         match frame {
-            Frame::Events(frame) => {
-                frame.set_modifiers(modifiers);
+            Frame::Voices(frame) => {
+                frame.set_env_procs(procs);
+                Ok(())
             }
-            Frame::Signals(_) => {
-                return Err(Error::msg("Port must be of type output event".into()));
-            }
+            Frame::Signals(_) => Err(Error::msg("Invalid port kind".into())),
         }
-        Ok(())
     }
 
     /// Add node as a child node
@@ -199,43 +207,37 @@ pub struct NodeResetCtx {
 
 /// Mutable output frames provided to [`NodeTrait::process`]
 pub struct NodeOutputs<'a> {
-    sr: SampleRateBaseType,
     range: Range<usize>,
     frames: &'a mut HashMap<PortId, Frame>,
 }
 
 impl<'a> NodeOutputs<'a> {
     #[must_use]
-    pub(crate) const fn new(
-        sr: SampleRateBaseType,
-        range: Range<usize>,
-        frames: &'a mut HashMap<PortId, Frame>,
-    ) -> Self {
-        Self { sr, range, frames }
+    pub(crate) const fn new(range: Range<usize>, frames: &'a mut HashMap<PortId, Frame>) -> Self {
+        Self { range, frames }
     }
 
-    pub fn clear(&mut self) {
+    pub fn clear_signals(&mut self) {
         for frame in self.frames.values_mut() {
-            // Do not clear Events as current state depends on previous states
             if let Frame::Signals(frame) = frame {
                 frame.reset();
             }
         }
     }
 
-    /// Attempts to get the mutable events for `port_id`
+    /// Attempts to get the mutable voices for `port_id`
     ///
-    /// Returns None if port not available or port is not a [`Events`]
+    /// Returns None if port not available or port is not a [`Frame::Voices`]
     ///
-    pub fn get_events_mut(&mut self, port_id: PortId) -> Option<EventsMut<'_>> {
+    pub fn get_voices_mut(&mut self, port_id: PortId) -> Option<VoicesMut<'_>> {
         self.frames
             .get_mut(&port_id)
-            .and_then(|frame| frame.get_events_mut(self.sr))
+            .and_then(|frame| frame.get_voices_mut())
     }
 
     /// Attempts to get the mutable buffer for `port_id`
     ///
-    /// Returns None if port not available or port is not a [`Signals`]
+    /// Returns None if port not available or port is not a [`Frame::Signals`]
     ///
     pub fn get_signals_mut(&mut self, port_id: PortId) -> Option<SignalsMut<'_>> {
         self.frames
@@ -246,7 +248,6 @@ impl<'a> NodeOutputs<'a> {
 
 /// Input frames provided to [`NodeTrait::process`]
 pub struct NodeInputs<'a> {
-    sr: SampleRateBaseType,
     range: Range<usize>,
     frames_maps: &'a HashMap<NodeId, HashMap<PortId, Frame>>,
     id: NodeId,
@@ -256,14 +257,12 @@ pub struct NodeInputs<'a> {
 impl<'a> NodeInputs<'a> {
     #[must_use]
     pub(crate) const fn new(
-        sr: SampleRateBaseType,
         range: Range<usize>,
         frames_maps: &'a HashMap<NodeId, HashMap<PortId, Frame>>,
         id: NodeId,
         connections_map: &'a HashMap<(NodeId, PortId), Connection>,
     ) -> Self {
         Self {
-            sr,
             range,
             frames_maps,
             id,
@@ -273,10 +272,10 @@ impl<'a> NodeInputs<'a> {
 
     /// Attempts to get the buffer for `port_id`
     ///
-    /// Returns None if port not available or port is not a [`Events`]
+    /// Returns None if port not available or port is not a [`Frame::Voices`]
     ///
     #[must_use]
-    pub fn get_events(&self, port_id: PortId) -> Option<Events<'_>> {
+    pub fn get_voices(&self, port_id: PortId) -> Option<Voices<'_>> {
         self.connections_map
             .get(&(self.id, port_id))
             .and_then(|connection| {
@@ -284,7 +283,7 @@ impl<'a> NodeInputs<'a> {
                     .get(&connection.source.node_id)
                     .and_then(|frames| frames.get(&connection.source.id))
             })
-            .and_then(|frame| frame.get_events(self.sr))
+            .and_then(|frame| frame.get_voices())
     }
 
     /// Attempts to get the buffer for `port_id`
@@ -339,7 +338,7 @@ pub struct Node {
     track_id: TrackId,
     parent_id: Option<NodeId>,
     ports: Vec<Port>,
-    pub(crate) inner: Box<dyn NodeTrait>,
+    inner: Box<dyn NodeTrait>,
     pub(crate) frames_invalidated: bool,
 }
 
@@ -503,5 +502,19 @@ impl Node {
 impl Debug for Node {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{{name: \"{}\", id: {:?}}}", self.inner.name(), self.id)
+    }
+}
+
+impl Deref for Node {
+    type Target = Box<dyn NodeTrait>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for Node {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
     }
 }

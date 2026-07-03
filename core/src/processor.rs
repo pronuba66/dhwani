@@ -363,14 +363,14 @@ impl Processor {
             // Temporarly take the item from hashmap
             let mut frames = self.frames_maps.remove(&node_id).unwrap();
             let node_inputs = NodeInputs::new(
-                self.sr,
                 frame_range.clone(),
                 &self.frames_maps,
                 node_id,
                 &self.compiled_connections_map,
             );
-            let mut node_outputs = NodeOutputs::new(self.sr, frame_range, &mut frames);
-            node_outputs.clear();
+            let mut node_outputs = NodeOutputs::new(frame_range, &mut frames);
+            // Do not clear Voices as current state depends on previous states
+            node_outputs.clear_signals();
             let step_range = {
                 // Step range is the range iterator sent to process the nodes,
                 // It will a range with the track start time as base
@@ -382,8 +382,7 @@ impl Processor {
                 let step_range_end = (new_end_step - track_start_step) as usize;
                 step_range_start..step_range_end
             };
-            node.inner
-                .process(step_range, &node_inputs, &mut node_outputs);
+            node.process(step_range, &node_inputs, &mut node_outputs);
             // Insert back
             self.frames_maps.insert(node_id, frames);
             // Insert back
@@ -878,7 +877,7 @@ impl Processor {
                         .time_range()
                         .start()
                         .to_samples(self.sr);
-                node.inner.reset(&ctx);
+                node.reset(&ctx);
             }
             // Clear all frame
             for frames in self.frames_maps.values_mut() {
@@ -903,6 +902,12 @@ impl Processor {
     #[must_use]
     pub const fn buffer_size(&self) -> usize {
         self.buffer_size
+    }
+
+    #[must_use]
+    pub fn min_voices_per_frame(&self) -> usize {
+        // Lets keep maximum of 64 voices per frame
+        (self.buffer_size / 2).max(64)
     }
 
     #[must_use]
@@ -939,13 +944,13 @@ impl Processor {
                 name: "Nodes".into(),
             },
             GraphCategory {
-                name: "Input Events".into(),
+                name: "Input Voices".into(),
             },
             GraphCategory {
                 name: "Input Signal".into(),
             },
             GraphCategory {
-                name: "Output Events".into(),
+                name: "Output Voices".into(),
             },
             GraphCategory {
                 name: "Output Signal".into(),
@@ -980,7 +985,7 @@ impl Processor {
             }
             let graph_node = GraphNode {
                 id: format!("N{}", node.id().0),
-                name: format!("N{} {}", node.id().0, node.inner.name()),
+                name: format!("N{} {}", node.id().0, node.name()),
                 x,
                 y,
                 value: node.id().0 as f64,
@@ -1000,9 +1005,9 @@ impl Processor {
             let n_ports = node.ports().len();
             for (j, port) in node.ports().iter().enumerate() {
                 let category = match port.kind {
-                    PortType::EventsIn => 1,
+                    PortType::VoicesIn => 1,
                     PortType::SignalIn => 2,
-                    PortType::EventsOut => 3,
+                    PortType::VoicesOut => 3,
                     PortType::SignalOut(_) => 4,
                     PortType::Proxy(_) => 5,
                 };
@@ -1113,7 +1118,11 @@ impl Processor {
 mod tests {
     use std::{fs::File, io::Write};
 
-    use crate::{channel::ChannelPositionsMask, event, events, midi_note::MidiNote, nodes};
+    use crate::{
+        channel::ChannelPositionsMask,
+        midi::{self, MidiNote},
+        midi_msgs, nodes,
+    };
 
     use super::*;
 
@@ -1127,11 +1136,11 @@ mod tests {
         let track_0_id = processor
             .add_track(TimeRange::new(TimeUnit::Seconds(0f32), None))
             .unwrap();
-        let events = events![
+        let msgs = midi_msgs![
             (
                 0,
                 TimeUnit::Seconds(0f32),
-                event::EventData::NoteOn {
+                midi::MidiEvent::NoteOn {
                     note: MidiNote::from_midi_str("C4").unwrap(), // C4
                     vel: 1f32,
                 }
@@ -1139,15 +1148,15 @@ mod tests {
             (
                 0,
                 TimeUnit::Seconds(1f32),
-                event::EventData::NoteOff {
+                midi::MidiEvent::NoteOff {
                     note: MidiNote::from_midi_str("C4").unwrap(), // C4
                     vel: 1f32,
                 }
             ),
             (
                 1, // Since previous note ends, reusing the same event id
-                TimeUnit::Seconds(2f32),
-                event::EventData::NoteOn {
+                TimeUnit::Seconds(1f32),
+                midi::MidiEvent::NoteOn {
                     note: MidiNote::from_midi_str("D4").unwrap(), // D4
                     vel: 1f32,
                 }
@@ -1155,7 +1164,7 @@ mod tests {
             (
                 1,
                 TimeUnit::Seconds(4f32),
-                event::EventData::NoteOff {
+                midi::MidiEvent::NoteOff {
                     note: MidiNote::from_midi_str("D4").unwrap(), // D4
                     vel: 1f32,
                 }
@@ -1163,7 +1172,7 @@ mod tests {
             (
                 2,
                 TimeUnit::Seconds(5f32),
-                event::EventData::NoteOn {
+                midi::MidiEvent::NoteOn {
                     note: MidiNote::from_midi_str("E4").unwrap(), // E4
                     vel: 1f32,
                 }
@@ -1171,35 +1180,38 @@ mod tests {
             (
                 2,
                 TimeUnit::Seconds(20f32),
-                event::EventData::NoteOff {
+                midi::MidiEvent::NoteOff {
                     note: MidiNote::from_midi_str("E4").unwrap(), // E4
                     vel: 1f32,
                 }
             ),
         ];
         let piano_roll_node_id = processor
-            .add_node(track_0_id, &nodes::PianoRollProps::new(events))
+            .add_node(track_0_id, &nodes::PianoRollProps::new(msgs))
             .expect("Failed to create piano roll node");
-        let sin_node_w = 440f32 * std::f32::consts::TAU;
+        let adsr_node_id = processor
+            .add_node(
+                track_0_id,
+                &nodes::AdsrProps::new(0.01f32, 0.04f32, 0.5f32, 0.5f32),
+            )
+            .expect("Failed to create piano roll node");
+        processor
+            .connect_nodes(piano_roll_node_id, adsr_node_id)
+            .expect("Failed to connect piano roll to adsr node");
         let sin_node_id = processor
             .add_node(
                 track_0_id,
-                &nodes::OscProps::new_saw(
-                    ChannelPositionsMask::FRONT_LEFT,
-                    0.25,
-                    sin_node_w,
-                    0.5f32,
-                )
-                .unwrap(),
+                &nodes::OscProps::new_saw(ChannelPositionsMask::FRONT_LEFT, 0.25, 1f32, 0.5f32)
+                    .unwrap(),
             )
             .expect("Failed to create sine node");
-
-        let _ = processor.connect_nodes(piano_roll_node_id, sin_node_id);
+        processor
+            .connect_nodes(adsr_node_id, sin_node_id)
+            .expect("Failed to connect adsr to sin node");
         processor
             .set_output_port(Some((sin_node_id, nodes::OscProps::PORT_ID_OUTPUT)))
             .expect("Failed to set output port");
         processor.set_playing(true);
-
         let mut file = File::create("../target/continuity_test.raw").expect("create failed");
         let mut file_buffer = vec![0u8; BUFFER_SIZE * 4];
         let mut buffer = [0f32; BUFFER_SIZE];

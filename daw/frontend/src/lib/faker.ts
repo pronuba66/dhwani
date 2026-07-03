@@ -3,6 +3,7 @@
  */
 
 import type { NodeInfo, Port } from "./core"
+import { AdsrNode, type AdsrNodeProps } from "./nodes/adsr"
 import { DelayNode, type DelayNodeProps } from "./nodes/delay"
 import { OscNode, type OscNodeProps } from "./nodes/osc"
 import { PianoRollNode, type PianoRollNodeProps } from "./nodes/piano-roll"
@@ -169,6 +170,10 @@ export class Faker {
         )
         break
       }
+      case AdsrNode.tag: {
+        ports = AdsrNodeFaker.ports(id, props as unknown as AdsrNodeProps)
+        break
+      }
       case OscNode.tag: {
         ports = OscNodeFaker.ports(id, props as unknown as OscNodeProps)
         break
@@ -211,6 +216,10 @@ export class Faker {
           id,
           props as unknown as PianoRollNodeProps
         )
+        break
+      }
+      case AdsrNode.tag: {
+        ports = AdsrNodeFaker.ports(id, props as unknown as AdsrNodeProps)
         break
       }
       case OscNode.tag: {
@@ -299,6 +308,31 @@ class PianoRollNodeFaker {
     const ports: Port[] = [
       {
         id: PianoRollNode.portIdOutput,
+        nodeId,
+        isEvent: true,
+        isInput: false,
+        autoConnect: true,
+        name: "Output",
+      },
+    ]
+    return ports
+  }
+}
+
+class AdsrNodeFaker {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  static ports(nodeId: number, props: AdsrNodeProps): Port[] {
+    const ports: Port[] = [
+      {
+        id: AdsrNode.portIdInput,
+        nodeId,
+        isEvent: true,
+        isInput: true,
+        autoConnect: true,
+        name: "Input",
+      },
+      {
+        id: AdsrNode.portIdOutput,
         nodeId,
         isEvent: true,
         isInput: false,
